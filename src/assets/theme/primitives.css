@@ -1,0 +1,79 @@
+/**
+ * Primitive design tokens — the raw palette and type stacks.
+ *
+ * Nothing in this file has an opinion about "light" or "dark"; it is
+ * just a set of values. tokens.css maps these onto semantic names.
+ * Components should never reference a --palette-* variable directly.
+ *
+ * Color ramps run light -> dark (0 = white, 1000 = near-black) so the
+ * same ramp can be walked in either direction depending on the theme.
+ *
+ * The neutral ramp is built at hue 222 / 6% saturation: a slight cool
+ * cast so the grays sit comfortably beside the blue accent, but low
+ * enough that they still read as gray rather than blue — which matters
+ * most on dark surfaces, where a tint is far more visible. Raising the
+ * saturation is the main thing that makes dark-mode body text look
+ * "blue" rather than neutral.
+ */
+
+:root {
+  /* Neutral ramp — surfaces, text, and borders in every theme. */
+  --palette-neutral-0: #ffffff;
+  --palette-neutral-50: #f8f8f9;
+  --palette-neutral-100: #f0f0f1;
+  --palette-neutral-150: #e5e6e8;
+  --palette-neutral-200: #cdcfd2;
+  --palette-neutral-300: #b0b3b9;
+  --palette-neutral-400: #90949c;
+  --palette-neutral-450: #828791;
+  --palette-neutral-500: #71757f;
+  --palette-neutral-550: #656972;
+  --palette-neutral-600: #53575d;
+  --palette-neutral-700: #393c41;
+  --palette-neutral-750: #282a2e;
+  --palette-neutral-800: #1f2124;
+  --palette-neutral-900: #18191b;
+  --palette-neutral-950: #151618;
+  --palette-neutral-1000: #0e0f10;
+
+  /* Accent (blue) ramp — brand / interactive color. */
+  --palette-blue-300: #a8c3ff;
+  --palette-blue-400: #7ea6ff;
+  --palette-blue-500: #4a7de0;
+  --palette-blue-600: #2f5fd8;
+  --palette-blue-700: #244aad;
+  --palette-blue-900: #0b1020;
+
+  /* Success (green) ramp. */
+  --palette-green-300: #4ade80;
+  --palette-green-400: #3ddc84;
+  --palette-green-600: #1c7a3e;
+  --palette-green-700: #166534;
+  --palette-green-900: #052e17;
+
+  /* Warning (amber) ramp. */
+  --palette-amber-400: #f5b400;
+  --palette-amber-600: #8a5a00;
+  --palette-amber-900: #3d2900;
+
+  /* Danger (red) ramp. */
+  --palette-red-300: #ff9494;
+  --palette-red-400: #ff7b7b;
+  --palette-red-500: #c4213c;
+  --palette-red-600: #b3123a;
+  --palette-red-900: #350a0f;
+
+  /* Type stacks.
+     'Inter Variable' is the self-hosted webfont (see fonts.css) — note
+     the family name is 'Inter Variable', not 'Inter'.
+     'Inter Fallback' is a metric-matched stand-in that renders while the
+     webfont loads, sized so the swap causes no reflow.
+     The system stack below those is the no-webfont safety net. */
+  --font-sans:
+    'Inter Variable', 'Inter Fallback', system-ui, -apple-system, 'Segoe UI',
+    Roboto, 'Helvetica Neue', Arial, 'Noto Sans', sans-serif,
+    'Apple Color Emoji', 'Segoe UI Emoji';
+  --font-mono:
+    ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, 'Liberation Mono',
+    monospace;
+}

@@ -1,0 +1,51 @@
+/**
+ * Theme entry point.
+ *
+ * Four layers, imported in dependency order:
+ *
+ *   fonts.css       @font-face declarations for self-hosted webfonts
+ *   reset.css       structural normalization, no colors
+ *   primitives.css  raw palette ramps + type stacks, no theme opinion
+ *   tokens.css      semantic tokens for the built-in light/dark schemes
+ *   base.css        applies the tokens to the document
+ *
+ * reset.css comes first so the theme layer always wins on anything
+ * visual, and so the reset never has to know a token exists.
+ *
+ * Components only ever read semantic tokens (`--color-surface`,
+ * `--color-fg-default`, …). They never reference a `--palette-*` value
+ * and never test for a theme, which is what keeps new themes additive.
+ *
+ * ---------------------------------------------------------------
+ * Adding a third theme (e.g. high-contrast, or a customer brand)
+ * ---------------------------------------------------------------
+ * Nothing in this directory needs restructuring, and no component
+ * changes at all:
+ *
+ *   1. Add any new raw colors to primitives.css, or reuse the ramps.
+ *   2. Create themes/<name>.css containing a single block:
+ *
+ *        :root.theme-<name> {
+ *          color-scheme: light;   // or dark — sets the fallback branch
+ *          --color-surface: ...;  // override the tokens you care about
+ *        }
+ *
+ *      Any token you *don't* override keeps resolving through
+ *      tokens.css's `light-dark()`, following the `color-scheme` you
+ *      declared. So a brand theme can restate just its brand colors and
+ *      inherit a sane light or dark base for everything else.
+ *   3. Import it below, after tokens.css.
+ *   4. Add the name to the `THEMES` array in
+ *      src/composables/useTheme.ts, and to the small allowlist in the
+ *      bootstrap script in index.html (kept an allowlist so a tampered
+ *      localStorage value can't inject an arbitrary class).
+ *   5. Verify contrast for any new pairing: 4.5:1 body text and 3:1
+ *      non-text UI, checked against every surface token — not just the
+ *      lightest/darkest one.
+ */
+
+@import './fonts.css';
+@import './reset.css';
+@import './primitives.css';
+@import './tokens.css';
+@import './base.css';

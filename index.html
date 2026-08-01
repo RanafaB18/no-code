@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<html lang="">
+  <head>
+    <meta charset="UTF-8">
+    <link rel="icon" href="/favicon.ico">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="color-scheme" content="light dark">
+    <title>Vite App</title>
+    <script>
+      // Progressive enhancement only: the theme system already works with
+      // zero JS via `color-scheme: light dark` (see
+      // src/assets/theme/tokens.css). This just re-applies a user's
+      // *explicit* override (set by the in-app toggle, see
+      // src/composables/useTheme.ts) before first paint, so returning
+      // visitors don't see a flash of the system theme before it
+      // switches to their chosen one.
+      (function () {
+        try {
+          var stored = localStorage.getItem('theme')
+          if (stored === 'light' || stored === 'dark') {
+            document.documentElement.classList.add('theme-' + stored)
+          }
+        } catch (e) {}
+      })()
+    </script>
+  </head>
+  <body>
+    <div id="app"></div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

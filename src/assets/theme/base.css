@@ -1,0 +1,45 @@
+/**
+ * Applies the design tokens to the document so every element inherits
+ * sane defaults without extra CSS.
+ *
+ * The reset handles structure; this file is where tokens actually get
+ * used. Keep it to document-level defaults — component styling belongs
+ * with the component.
+ */
+
+html {
+  background-color: var(--color-surface);
+  color: var(--color-fg-default);
+  font-family: var(--font-sans);
+}
+
+body {
+  background-color: var(--color-surface);
+  color: var(--color-fg-default);
+}
+
+code,
+kbd,
+samp,
+pre {
+  font-family: var(--font-mono);
+  font-size: 0.9375em;
+}
+
+a {
+  color: var(--color-link);
+}
+
+a:hover {
+  color: var(--color-link-hover);
+}
+
+:focus-visible {
+  outline: 2px solid var(--color-focus-ring);
+  outline-offset: 2px;
+}
+
+::selection {
+  background-color: var(--color-accent);
+  color: var(--color-fg-on-accent);
+}

@@ -1,0 +1,99 @@
+/**
+ * Minimal modern CSS reset.
+ *
+ * Deliberately structural only — box model, spacing, inheritance, and
+ * media defaults. It sets no colors, so the theme layer stays the single
+ * source of truth for anything visual. Keep it that way: a color here
+ * would be invisible to the token system and wouldn't respond to a
+ * theme switch.
+ */
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+/* Remove default margins; spacing is opted into, not inherited. */
+* {
+  margin: 0;
+}
+
+html {
+  /* Prevent iOS text-size inflation on rotation. */
+  -webkit-text-size-adjust: 100%;
+  /* Give in-page anchor targets room below any sticky header. */
+  scroll-padding-block-start: 2rem;
+}
+
+body {
+  min-height: 100vh;
+  min-height: 100dvh;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Headings and short text wrap better with tighter line-height and
+   balanced/pretty wrapping. */
+h1,
+h2,
+h3,
+h4,
+h5,
+h6 {
+  line-height: 1.2;
+  text-wrap: balance;
+}
+
+p,
+li,
+figcaption {
+  text-wrap: pretty;
+  max-width: 70ch;
+}
+
+/* Replaced elements should never overflow their container. */
+img,
+picture,
+video,
+canvas,
+svg {
+  display: block;
+  max-width: 100%;
+}
+
+/* Form controls don't inherit typography by default. */
+input,
+button,
+textarea,
+select {
+  font: inherit;
+  color: inherit;
+}
+
+button {
+  background: none;
+  border: none;
+}
+
+/* Only strip list styling where the author has taken over semantics. */
+:where(ul, ol)[role='list'] {
+  list-style: none;
+  padding: 0;
+}
+
+/* Anchor targets shouldn't hide under sticky UI. */
+:target {
+  scroll-margin-block-start: 2rem;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}

@@ -1,0 +1,59 @@
+/**
+ * Webfont loading. Imported before every other layer so the @font-face
+ * rules exist by the time anything references --font-sans.
+ *
+ * Inter is self-hosted via @fontsource-variable/inter — the files are
+ * resolved out of node_modules and fingerprinted by Vite, so they get
+ * immutable long-cache headers and no third-party request is made at
+ * runtime (no Google Fonts CDN, no extra DNS/TLS round trip, nothing
+ * leaking the visitor's IP to another origin).
+ *
+ * Both files declare `font-weight: 100 900` — one variable font covers
+ * the whole weight range, so there is no per-weight download.
+ *
+ * Each @font-face carries a `unicode-range`, so a browser rendering
+ * English only ever fetches the Latin subset; the Cyrillic, Greek and
+ * Vietnamese cuts are emitted into the build but never requested.
+ *
+ * NOTE: the family name these register is `Inter Variable`, not
+ * `Inter`. Referencing `Inter` silently falls through to the next font
+ * in the stack.
+ */
+
+/* Upright. */
+@import '@fontsource-variable/inter';
+
+/* True italics — without this the browser synthesises obliques by
+   shearing the upright, which Inter has a real italic design for. */
+@import '@fontsource-variable/inter/wght-italic.css';
+
+/**
+ * Metric-matched fallback.
+ *
+ * `font-display: swap` means the page paints in a fallback font first,
+ * then swaps to Inter. If the two fonts have different metrics, that
+ * swap reflows every line of text — a visible jolt, and a Cumulative
+ * Layout Shift penalty.
+ *
+ * This face renders local Arial but overrides its metrics to match
+ * Inter's, so the pre-swap and post-swap text occupy identical boxes
+ * and the swap is nearly imperceptible.
+ *
+ * The numbers are computed, not eyeballed — derived from
+ * @capsizecss/metrics for Inter and Arial:
+ *
+ *   size-adjust = Inter.xWidthAvg / Arial.xWidthAvg = 978 / 913
+ *   the vertical overrides then restate Inter's ascent/descent/lineGap
+ *   as a fraction of that scaled em.
+ *
+ * Regenerate these if the webfont changes; they are specific to the
+ * Inter/Arial pairing.
+ */
+@font-face {
+  font-family: 'Inter Fallback';
+  src: local('Arial');
+  size-adjust: 107.12%;
+  ascent-override: 90.44%;
+  descent-override: 22.52%;
+  line-gap-override: 0%;
+}

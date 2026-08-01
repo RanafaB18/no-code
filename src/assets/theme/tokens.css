@@ -1,0 +1,86 @@
+/**
+ * Semantic color tokens for the two built-in schemes (light and dark).
+ *
+ * Every token is declared exactly once, using `light-dark()`. Which
+ * branch resolves is decided entirely by the element's `color-scheme`,
+ * so the root class toggle at the bottom of this file is all that's
+ * needed to force a scheme — no JavaScript, and no duplicated blocks
+ * that could drift apart.
+ *
+ *   light-dark(<light value>, <dark value>)
+ *
+ * How the no-JS default works:
+ *   `color-scheme: light dark` on :root means "this page supports both,
+ *   pick whichever the OS asks for". The browser resolves that against
+ *   `prefers-color-scheme` during the very first style pass, so the
+ *   correct theme is painted on load with zero script.
+ *
+ * How the override works:
+ *   `.theme-light` / `.theme-dark` on <html> narrow `color-scheme` to a
+ *   single value, which pins every `light-dark()` call to that branch.
+ *   Because the classes only change `color-scheme` — not the tokens —
+ *   there is nothing to keep in sync.
+ *
+ * Contrast: every foreground token below meets WCAG AA against *all
+ * four* surface tokens in both schemes (4.5:1 body text, 3:1 non-text
+ * UI). Re-verify against the darkest light surface (--color-surface-
+ * sunken) and the lightest dark surface (--color-surface-overlay) when
+ * changing values — those are the binding constraints, not white/black.
+ */
+
+:root {
+  color-scheme: light dark;
+
+  /* ---- Surfaces ---- */
+  --color-surface: light-dark(var(--palette-neutral-50), var(--palette-neutral-950));
+  --color-surface-raised: light-dark(var(--palette-neutral-0), var(--palette-neutral-800));
+  --color-surface-sunken: light-dark(var(--palette-neutral-100), var(--palette-neutral-1000));
+  --color-surface-overlay: light-dark(var(--palette-neutral-0), var(--palette-neutral-750));
+
+  /* ---- Borders ----
+     `--color-border` is decorative separation only and deliberately sits
+     below 3:1. Any border that conveys the bounds of an interactive
+     control (input, checkbox, select) must use `--color-border-strong`
+     to satisfy WCAG 1.4.11 non-text contrast. */
+  --color-border: light-dark(var(--palette-neutral-200), var(--palette-neutral-700));
+  --color-border-strong: var(--palette-neutral-450);
+
+  /* ---- Foreground / text ---- */
+  --color-fg-default: light-dark(var(--palette-neutral-900), var(--palette-neutral-50));
+  --color-fg-muted: light-dark(var(--palette-neutral-600), var(--palette-neutral-300));
+  --color-fg-subtle: light-dark(var(--palette-neutral-550), var(--palette-neutral-400));
+
+  /* Text drawn on top of a filled accent/status background. */
+  --color-fg-on-accent: light-dark(var(--palette-neutral-0), var(--palette-blue-900));
+  --color-fg-on-success: light-dark(var(--palette-neutral-0), var(--palette-green-900));
+  --color-fg-on-warning: var(--palette-amber-900);
+  --color-fg-on-danger: light-dark(var(--palette-neutral-0), var(--palette-red-900));
+
+  /* ---- Accent / interactive ---- */
+  --color-accent: light-dark(var(--palette-blue-600), var(--palette-blue-400));
+  --color-accent-hover: light-dark(var(--palette-blue-700), var(--palette-blue-300));
+  --color-accent-active: light-dark(var(--palette-blue-700), var(--palette-blue-300));
+  --color-link: var(--color-accent);
+  --color-link-hover: var(--color-accent-hover);
+  --color-focus-ring: var(--color-accent);
+
+  /* ---- Status ----
+     `*-text` variants are the readable-on-a-surface form; the bare token
+     is the filled/background form and pairs with `--color-fg-on-*`. */
+  --color-success: light-dark(var(--palette-green-600), var(--palette-green-400));
+  --color-success-text: light-dark(var(--palette-green-700), var(--palette-green-300));
+  --color-warning: var(--palette-amber-400);
+  --color-warning-text: light-dark(var(--palette-amber-600), var(--palette-amber-400));
+  --color-danger: light-dark(var(--palette-red-500), var(--palette-red-400));
+  --color-danger-text: light-dark(var(--palette-red-600), var(--palette-red-300));
+}
+
+/* Explicit user override. These only pin `color-scheme`; the token
+   values above resolve themselves accordingly. */
+:root.theme-light {
+  color-scheme: light;
+}
+
+:root.theme-dark {
+  color-scheme: dark;
+}
