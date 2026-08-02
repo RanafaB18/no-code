@@ -401,6 +401,45 @@ describe('Workspace', () => {
     input.remove()
   })
 
+  it('takes focus off an inspector field when the canvas is pressed', async () => {
+    const wrapper = mount(BuilderWorkspace, { attachTo: document.body })
+    const node = addNode('div', { left: 40, top: 30, width: 100, height: 60 })
+    await nextTick()
+
+    const input = document.createElement('input')
+    document.body.appendChild(input)
+    input.focus()
+
+    firePointer(nodeFor(wrapper, node.id), 'pointerdown', { x: 50, y: 40 })
+    await nextTick()
+
+    // Pressing preventDefaults to kill native text selection, which also
+    // suppresses the focus change — so without moving focus explicitly,
+    // every tool shortcut would keep landing in the field just left.
+    expect(document.activeElement).toBe(wrapper.element)
+    input.remove()
+  })
+
+  it('previews the drawn box under the pointer even inside a laid-out frame', async () => {
+    const parent = addNode('div', { layout: 'flex', width: 400, height: 300 })
+    const wrapper = mount(BuilderWorkspace, { attachTo: document.body })
+    await nextTick()
+
+    arm('frame')
+    const parentNode = nodeFor(wrapper, parent.id)
+    firePointer(parentNode, 'pointerdown', { x: 20, y: 30 })
+    firePointer(parentNode, 'pointermove', { x: 120, y: 90 })
+    await nextTick()
+
+    // The frame takes the element over on release; while the gesture is
+    // still running the pointer is in charge, so the ghost tracks it
+    // rather than jumping to where the flex row happens to end.
+    const ghost = wrapper.get('.workspace__ghost')
+    expect(ghost.attributes('style')).toContain('position: absolute')
+    expect(ghost.attributes('style')).toContain('left: 20px')
+    expect(ghost.attributes('style')).toContain('top: 30px')
+  })
+
   it('moves an absolutely positioned node by dragging it', async () => {
     const node = addNode('div', { left: 40, top: 30, width: 100, height: 60 })
     const wrapper = mount(BuilderWorkspace, { attachTo: document.body })

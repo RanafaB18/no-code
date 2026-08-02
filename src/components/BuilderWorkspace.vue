@@ -309,22 +309,27 @@ function geometryFor(target: HTMLElement | null) {
 }
 
 /**
- * The ghost previews the drawn box at its true size.
+ * The ghost previews the box being drawn, under the pointer.
  *
- * It is teleported into the target frame, so it inherits that frame's
- * positioning context: inside a Free frame it sits at the drawn offset,
- * inside a flex/grid frame the parent places it exactly as it will place
- * the real node.
+ * Always absolutely positioned at the drawn offset, even when the target
+ * frame lays its children out — a rubber band that jumped to wherever the
+ * flex row happened to end would stop tracking the gesture that is
+ * drawing it. The frame takes the element over on release; until then the
+ * pointer is in charge.
+ *
+ * Being out of flow is what makes that safe: the ghost is teleported into
+ * the target, but an absolute box is not laid out by its parent, so
+ * previewing it never shifts the siblings it is about to join. The target
+ * is always `absolute` or `relative`, never `static`, so it is reliably
+ * the containing block these offsets resolve against.
  */
 const ghostStyle = computed(() => {
   const geometry = geometryFor(dropTargetNode.value)
   if (!geometry) return null
 
-  const size = { width: `${geometry.width}px`, height: `${geometry.height}px` }
-  if (dropTargetLayout.value !== 'none') return size
-
   return {
-    ...size,
+    width: `${geometry.width}px`,
+    height: `${geometry.height}px`,
     position: 'absolute' as const,
     left: `${geometry.left}px`,
     top: `${geometry.top}px`,
@@ -557,6 +562,13 @@ function handleHandleDown(event: PointerEvent, handle: SelectionHandle) {
 }
 
 function handlePointerDown(event: PointerEvent) {
+  // Both paths below call preventDefault to stop a native text selection
+  // dragging out behind the gesture — and that also suppresses the focus
+  // change a press would normally cause. Without moving focus here, it
+  // stays wherever it was: type in an inspector field, click the canvas,
+  // and every tool shortcut would still be swallowed by that field.
+  workspace.value?.focus()
+
   if (!activeTool.value) {
     // Idle mode: selection is delegated here rather than bound per
     // element, so the innermost element under the pointer wins — a
@@ -658,6 +670,7 @@ useToolShortcuts(() => {
     ref="workspace"
     class="workspace"
     :class="{ 'workspace--armed': activeTool !== null }"
+    tabindex="-1"
     @pointerdown="handlePointerDown"
     @pointermove="handlePointerMove"
     @pointerup="handlePointerUp"
@@ -729,6 +742,14 @@ useToolShortcuts(() => {
 .workspace {
   position: relative;
   min-height: 100vh;
+}
+
+/* Focused programmatically on press, so canvas shortcuts stop landing in
+   whichever inspector field was last typed in. `tabindex="-1"` keeps it
+   out of the tab order, so this is never a keyboard destination and needs
+   no ring — the selection frame already says what is focused. */
+.workspace:focus {
+  outline: none;
 }
 
 .workspace--armed {
