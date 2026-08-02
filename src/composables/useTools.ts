@@ -1,7 +1,7 @@
 import { computed, ref } from 'vue'
 
-import { frameDisplay } from './useFrameTool'
-import type { ElementType } from './useCanvasNodes'
+import { frameLayout } from './useFrameTool'
+import type { ElementType, NodeInit } from './useCanvasNodes'
 
 export interface Tool {
   /**
@@ -22,13 +22,13 @@ export interface Tool {
   /** The HTML tag this tool creates. */
   creates: ElementType
   /**
-   * Styles stamped onto whatever this tool creates.
+   * The node fields and styles stamped onto whatever this tool creates.
    *
    * A function rather than a literal so a tool can carry a user-chosen
    * option — the Frame tool's display — while still being a static
    * registry entry.
    */
-  seedStyles: () => Record<string, string>
+  seedInit: () => NodeInit
 }
 
 /**
@@ -48,7 +48,7 @@ export const TOOLS = [
     label: 'Frame',
     shortcut: '1',
     creates: 'div',
-    seedStyles: () => ({ display: frameDisplay.value }),
+    seedInit: () => ({ layout: frameLayout.value }),
   },
 ] as const satisfies readonly Tool[]
 

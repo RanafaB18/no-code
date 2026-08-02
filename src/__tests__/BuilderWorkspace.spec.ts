@@ -3,7 +3,7 @@ import { mount, type VueWrapper } from '@vue/test-utils'
 import { nextTick } from 'vue'
 
 import BuilderWorkspace from '../components/BuilderWorkspace.vue'
-import { frameDisplay } from '../composables/useFrameTool'
+import { DEFAULT_FRAME_LAYOUT, frameLayout } from '../composables/useFrameTool'
 import { useTools } from '../composables/useTools'
 import { VIEWPORT_ID } from '../composables/useCanvasNodes'
 import { getNode, useCanvasNodes } from '../composables/useCanvasNodes'
@@ -57,7 +57,7 @@ beforeEach(() => {
   selectNode(null)
   disarm()
   // Module-level singleton like the armed tool, so it leaks between tests.
-  frameDisplay.value = 'block'
+  frameLayout.value = DEFAULT_FRAME_LAYOUT
 })
 
 describe('Workspace', () => {
@@ -79,7 +79,9 @@ describe('Workspace', () => {
     // Geometry lives on the node as numbers, never in styles.
     const drawn = getNode(viewport.value.childrenIds[0])
     expect(drawn).toMatchObject({ left: 10, top: 10, width: 100, height: 70 })
-    expect(drawn?.styles).toEqual({ display: 'block' })
+    // Layout is a node field, not a CSS string in styles.
+    expect(drawn?.layout).toBe(DEFAULT_FRAME_LAYOUT)
+    expect(drawn?.styles).toEqual({})
   })
 
   it('normalises a drag made in the reverse direction', async () => {
@@ -288,15 +290,15 @@ describe('Workspace', () => {
     expect(parentNode.querySelector('.workspace__ghost')).toBeNull()
   })
 
-  it('seeds the chosen display alongside the drawn geometry', async () => {
+  it('seeds the chosen layout alongside the drawn geometry', async () => {
     const wrapper = mount(BuilderWorkspace, { attachTo: document.body })
 
-    frameDisplay.value = 'flex'
+    frameLayout.value = 'flex'
     arm('frame')
     await drag(wrapper.element, { x: 0, y: 0 }, { x: 100, y: 50 })
 
     const drawn = getNode(viewport.value.childrenIds[0])
-    expect(drawn?.styles).toEqual({ display: 'flex' })
+    expect(drawn?.layout).toBe('flex')
     expect(drawn).toMatchObject({ width: 100, height: 50 })
   })
 

@@ -2,7 +2,8 @@
 import { computed, nextTick, ref, useTemplateRef, watch } from 'vue'
 
 import ToolButton from '@/components/ToolButton.vue'
-import { DISPLAY_VALUES, type DisplayValue } from '@/composables/styleSchema'
+import { LAYOUT_VALUES } from '@/composables/styleSchema'
+import type { NodeLayout } from '@/composables/useCanvasNodes'
 import { useFrameTool } from '@/composables/useFrameTool'
 import { useTools, type RegisteredTool } from '@/composables/useTools'
 
@@ -12,7 +13,7 @@ const props = defineProps<{
 }>()
 
 const { activeToolId, toggle, disarm } = useTools()
-const { display, setDisplay } = useFrameTool()
+const { layout, setLayout } = useFrameTool()
 
 const armed = computed(() => activeToolId.value === props.tool.id)
 
@@ -21,7 +22,7 @@ const menu = useTemplateRef<HTMLElement>('menu')
 
 /**
  * Whether the menu is showing — separate from `armed` because the two
- * diverge the moment a display is chosen: choosing closes the menu but
+ * diverge the moment a layout is chosen: choosing closes the menu but
  * deliberately leaves the tool armed, ready to draw with immediately.
  * Arming still opens it; the watcher below is what makes that happen.
  */
@@ -42,8 +43,8 @@ watch(armed, async (isArmed) => {
   menu.value?.querySelector<HTMLInputElement>('input:checked')?.focus()
 })
 
-function choose(value: DisplayValue) {
-  setDisplay(value)
+function choose(value: NodeLayout) {
+  setLayout(value)
   menuOpen.value = false
 }
 
@@ -60,7 +61,7 @@ function closeAndDisarm() {
       :label="tool.label"
       :shortcut="tool.shortcut"
       :active="armed"
-      aria-controls="frame-display-menu"
+      aria-controls="frame-layout-menu"
       :aria-expanded="menuOpen"
       :title="`${tool.label} (${tool.shortcut})`"
       @click="toggle(tool.id)"
@@ -71,26 +72,25 @@ function closeAndDisarm() {
          roving tabindex is easy to get subtly wrong. -->
     <fieldset
       v-if="menuOpen"
-      id="frame-display-menu"
+      id="frame-layout-menu"
       ref="menu"
       class="frame-tool__menu"
       @keydown.esc.stop="closeAndDisarm"
     >
-      <legend class="visually-hidden">Frame display</legend>
+      <legend class="visually-hidden">Frame layout</legend>
 
       <label
-        v-for="value in DISPLAY_VALUES"
+        v-for="value in LAYOUT_VALUES"
         :key="value"
         class="frame-tool__option"
-        :class="{ 'frame-tool__option--active': display === value }"
-        :title="value === 'inline' ? 'inline (sized by content, not the drag)' : undefined"
+        :class="{ 'frame-tool__option--active': layout === value }"
       >
         <input
           type="radio"
-          name="frame-display"
+          name="frame-layout"
           class="visually-hidden"
           :value="value"
-          :checked="display === value"
+          :checked="layout === value"
           @change="choose(value)"
         />
         <span>{{ value }}</span>

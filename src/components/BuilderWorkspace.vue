@@ -322,7 +322,7 @@ function handlePointerUp(event: PointerEvent) {
 
     const created = addNode(
       tool.creates,
-      { ...placed, styles: tool.seedStyles() },
+      { ...tool.seedInit(), ...placed },
       dropTargetId.value,
     )
     // Hand the new element to the inspector — the tool disarms below, so

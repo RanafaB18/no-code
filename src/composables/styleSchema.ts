@@ -1,98 +1,154 @@
+import {
+  resolvedPosition,
+  type CanvasNode,
+  type NodeLayout,
+  type NodePosition,
+} from './useCanvasNodes'
+
 /**
- * The CSS properties the inspector can edit.
+ * The properties the inspector can edit.
  *
- * This is a registry, not a hardcoded form: Inspector.vue renders itself
- * by iterating STYLE_PROPERTIES, so adding a property here is the only
- * change needed to gain a control for it. Same posture as `THEMES` in
- * useTheme.ts and `TOOLS` in useTools.ts — extend the array, don't
- * refactor the consumer.
+ * A registry, not a hardcoded form: StyleInspector renders itself by
+ * iterating this, so adding a property here is the only change needed to
+ * gain a control for it. Same posture as `THEMES` and `TOOLS` — extend
+ * the array, don't refactor the consumer.
  */
 
 /**
- * Which form input the user is given to type a value into.
+ * Which form input the user is given.
  *
- * This decides the widget only — it says nothing about the CSS produced,
- * so several properties share one input type: `padding`, `margin` and
- * `borderRadius` are all edited through `'length'`.
+ * Says nothing about what it writes — several properties share one input.
  *
- *   'length'  free-text field for a CSS length ('12px', '1rem', 'auto')
- *   'color'   native colour picker (<input type="color">)
+ *   'number'  numeric field, for geometry
+ *   'length'  free-text CSS length ('12px', '1rem', 'auto')
+ *   'color'   native colour picker
  *   'select'  dropdown constrained to the property's `options`
- *
- * Supporting a new widget (a slider, a box-model spacing editor) means
- * adding a member here and a matching branch in Inspector.vue. It's a
- * named union rather than an inline one so those two places can
- * reference the same type and can't drift apart.
  */
-export type StyleInputType = 'length' | 'color' | 'select'
+export type StyleInputType = 'number' | 'length' | 'color' | 'select'
+
+/**
+ * Where a value lives.
+ *
+ * `node` writes a first-class field — geometry, layout, position — which
+ * the canvas manipulates directly and which must never be a CSS string.
+ * `style` writes into the node's `styles` map.
+ */
+export type PropertySource = 'node' | 'style'
 
 export interface StyleProperty {
-  /** camelCase CSS property — the form Vue's `:style` binding expects. */
+  /** For `style`, the camelCase CSS property. For `node`, the field name. */
   key: string
   label: string
-  /** The widget the inspector renders to edit this property. */
   input: StyleInputType
+  source: PropertySource
   /** Only meaningful for `input: 'select'`. */
   options?: readonly string[]
-  /** Shown as the input's placeholder to hint the expected format. */
   placeholder?: string
+  /**
+   * Hides a property that would be inert in the node's current context —
+   * offsets under a parent that positions its own children, or flex
+   * options on a frame with no layout. Showing a value the browser
+   * ignores is worse than showing nothing.
+   */
+  appliesTo?: (node: CanvasNode) => boolean
 }
 
-/**
- * The `display` values the Frame tool offers and the inspector can set.
- *
- * Owned here rather than by the tool so the toolbar dropdown and the
- * inspector field cannot drift apart — both read this one array.
- *
- * `none` is deliberately absent: it would make an element both
- * unselectable and unmeasurable, breaking the selection overlay. Adding
- * it would need a guard in the workspace's `measureRect`.
- */
-export const DISPLAY_VALUES = ['block', 'flex', 'grid', 'inline-block', 'inline'] as const
+export const LAYOUT_VALUES = ['none', 'flex', 'grid'] as const satisfies readonly NodeLayout[]
 
-export type DisplayValue = (typeof DISPLAY_VALUES)[number]
+export const POSITION_VALUES = ['auto', 'absolute'] as const satisfies readonly NodePosition[]
+
+/** True when the node positions itself, so its offsets actually apply. */
+function isPositioned(node: CanvasNode) {
+  return resolvedPosition(node) === 'absolute'
+}
+
+/** True when the node arranges its own children, so flex/grid options apply. */
+function laysOutChildren(node: CanvasNode) {
+  return node.layout !== 'none'
+}
 
 export const STYLE_PROPERTIES: readonly StyleProperty[] = [
-  // First because it is the most structural property, and the one the
-  // Frame tool has just set at creation time.
-  { key: 'display', label: 'Display', input: 'select', options: DISPLAY_VALUES },
-  { key: 'width', label: 'Width', input: 'length', placeholder: 'auto' },
-  { key: 'minHeight', label: 'Min height', input: 'length', placeholder: '0' },
-  { key: 'padding', label: 'Padding', input: 'length', placeholder: '0' },
-  { key: 'margin', label: 'Margin', input: 'length', placeholder: '0' },
-  { key: 'backgroundColor', label: 'Background', input: 'color' },
-  { key: 'borderWidth', label: 'Border width', input: 'length', placeholder: '0' },
+  // Layout — how this frame arranges its children.
+  { key: 'layout', label: 'Layout', input: 'select', source: 'node', options: LAYOUT_VALUES },
+  {
+    key: 'flexDirection',
+    label: 'Direction',
+    input: 'select',
+    source: 'style',
+    options: ['row', 'column'],
+    appliesTo: laysOutChildren,
+  },
+  { key: 'gap', label: 'Gap', input: 'length', source: 'style', appliesTo: laysOutChildren },
+  {
+    key: 'justifyContent',
+    label: 'Justify',
+    input: 'select',
+    source: 'style',
+    options: ['flex-start', 'center', 'flex-end', 'space-between', 'space-around'],
+    appliesTo: laysOutChildren,
+  },
+  {
+    key: 'alignItems',
+    label: 'Align',
+    input: 'select',
+    source: 'style',
+    options: ['stretch', 'flex-start', 'center', 'flex-end'],
+    appliesTo: laysOutChildren,
+  },
+
+  // Position — how this frame places itself. Offsets are hidden when a
+  // parent lays it out, since it is then placed by the parent and the
+  // values would do nothing.
+  {
+    key: 'position',
+    label: 'Type',
+    input: 'select',
+    source: 'node',
+    options: POSITION_VALUES,
+  },
+  { key: 'left', label: 'Left', input: 'number', source: 'node', appliesTo: isPositioned },
+  { key: 'top', label: 'Top', input: 'number', source: 'node', appliesTo: isPositioned },
+
+  // Size — geometry, never CSS strings.
+  { key: 'width', label: 'Width', input: 'number', source: 'node' },
+  { key: 'height', label: 'Height', input: 'number', source: 'node' },
+
+  // Appearance.
+  { key: 'padding', label: 'Padding', input: 'length', source: 'style', placeholder: '0' },
+  { key: 'backgroundColor', label: 'Background', input: 'color', source: 'style' },
+  { key: 'borderWidth', label: 'Border width', input: 'length', source: 'style', placeholder: '0' },
   {
     key: 'borderStyle',
     label: 'Border style',
     input: 'select',
+    source: 'style',
     options: ['none', 'solid', 'dashed', 'dotted'],
   },
-  { key: 'borderColor', label: 'Border color', input: 'color' },
-  { key: 'borderRadius', label: 'Radius', input: 'length', placeholder: '0' },
+  { key: 'borderColor', label: 'Border color', input: 'color', source: 'style' },
+  { key: 'borderRadius', label: 'Radius', input: 'length', source: 'style', placeholder: '0' },
 
-  // Both govern how a frame and its children resolve size conflicts.
-  //
-  // `overflow` defaults to `visible`, so a child that outgrows its parent
-  // simply spills out and paints over whatever is beneath — this is the
-  // only property that clips, or produces a scrollbar.
-  //
-  // `flexShrink` exists because flex items default to `flex-shrink: 1`:
-  // a child drawn 500px wide inside a 360px flex parent silently shrinks
-  // to fit while the inspector still reads 500px. Setting 0 makes the
-  // drawn width stick. It only does anything inside a flex parent, which
-  // is not enforced — the schema deliberately doesn't model property
-  // interdependencies.
+  /**
+   * `overflow` defaults to `visible`, so a child that outgrows its parent
+   * spills out and paints over whatever is beneath. This is the only
+   * property that clips, or produces a scrollbar.
+   *
+   * `clip` is a real CSS value, not a friendly name for `hidden`: both
+   * clip, but `hidden` still makes the box a scroll container that can be
+   * scrolled programmatically, while `clip` creates none at all.
+   */
   {
     key: 'overflow',
     label: 'Overflow',
     input: 'select',
-    options: ['visible', 'auto', 'hidden', 'scroll'],
+    source: 'style',
+    options: ['visible', 'hidden', 'clip', 'scroll', 'auto'],
   },
-  // 'length' rather than a new 'number' input: it is a free-text numeric
-  // field, and one property doesn't justify another widget type.
-  { key: 'flexShrink', label: 'Flex shrink', input: 'length', placeholder: '1' },
 ]
+
+/** The properties that apply to a node, in schema order. */
+export function propertiesFor(node: CanvasNode): readonly StyleProperty[] {
+  return STYLE_PROPERTIES.filter((property) => property.appliesTo?.(node) ?? true)
+}
 
 /**
  * Strips unset values before the styles reach a `:style` binding.

@@ -1,29 +1,68 @@
 <script setup lang="ts">
 import DraggablePanel from '@/components/DraggablePanel.vue'
-import { STYLE_PROPERTIES } from '@/composables/styleSchema'
+import { propertiesFor, type StyleProperty } from '@/composables/styleSchema'
 import { anchorRightMiddle } from '@/composables/useDraggablePanel'
-import { useCanvasNodes } from '@/composables/useCanvasNodes'
+import {
+  useCanvasNodes,
+  type CanvasNode,
+  type NodeLayout,
+  type NodePosition,
+} from '@/composables/useCanvasNodes'
 
-const { selectedNode, updateStyle } = useCanvasNodes()
+const { selectedNode, updateStyle, updateGeometry, updateLayout, updatePosition } =
+  useCanvasNodes()
 
 /**
  * `<input type="color">` has no empty state — given '' it falls back to
- * black, which would show a colour the element doesn't actually have.
- * The swatch shows this while the property is unset, and the row's clear
- * button is the way back to "not set".
+ * black, which would show a colour the node doesn't actually have.
  */
 const UNSET_COLOR = '#000000'
 
-function setStyle(key: string, value: string) {
-  const node = selectedNode.value
-  if (!node) return
-  updateStyle(node.id, key, value)
+/** Reads a property from wherever it lives. */
+function valueOf(node: CanvasNode, property: StyleProperty): string {
+  if (property.source === 'style') return node.styles[property.key] ?? ''
+  const raw = node[property.key as keyof CanvasNode]
+  return raw === undefined || raw === null ? '' : String(raw)
 }
 
-function handleInput(key: string, event: Event) {
+/**
+ * Writes a property back to wherever it lives.
+ *
+ * Geometry, layout and position are first-class fields the canvas reads
+ * directly — writing them into `styles` would put them somewhere nothing
+ * looks, which is exactly the bug this routing exists to prevent.
+ */
+function setValue(property: StyleProperty, value: string) {
+  const node = selectedNode.value
+  if (!node) return
+
+  if (property.source === 'style') {
+    updateStyle(node.id, property.key, value)
+    return
+  }
+
+  if (property.key === 'layout') {
+    updateLayout(node.id, value as NodeLayout)
+    return
+  }
+
+  if (property.key === 'position') {
+    updatePosition(node.id, (value || 'auto') as NodePosition)
+    return
+  }
+
+  // Geometry. An empty field clears the pin rather than writing 0 —
+  // "unset" and "zero" are different, and conflating them would silently
+  // move an element to the origin.
+  const numeric = value === '' ? undefined : Number(value)
+  if (numeric !== undefined && !Number.isFinite(numeric)) return
+  updateGeometry(node.id, { [property.key]: numeric })
+}
+
+function handleInput(property: StyleProperty, event: Event) {
   const target = event.target
   if (target instanceof HTMLInputElement || target instanceof HTMLSelectElement) {
-    setStyle(key, target.value)
+    setValue(property, target.value)
   }
 }
 </script>
@@ -43,7 +82,7 @@ function handleInput(key: string, event: Event) {
       <!-- Rendered from STYLE_PROPERTIES, so adding an editable property
            is one entry in the schema rather than a change here. -->
       <div class="inspector__fields">
-        <div v-for="property in STYLE_PROPERTIES" :key="property.key" class="field">
+        <div v-for="property in propertiesFor(selectedNode)" :key="property.key" class="field">
           <label class="field__label" :for="`field-${property.key}`">{{ property.label }}</label>
 
           <div class="field__controls">
@@ -51,8 +90,8 @@ function handleInput(key: string, event: Event) {
               v-if="property.input === 'select'"
               :id="`field-${property.key}`"
               class="field__input"
-              :value="selectedNode.styles[property.key] ?? ''"
-              @change="handleInput(property.key, $event)"
+              :value="valueOf(selectedNode, property)"
+              @change="handleInput(property, $event)"
             >
               <option value="">—</option>
               <option v-for="option in property.options" :key="option" :value="option">
@@ -65,8 +104,8 @@ function handleInput(key: string, event: Event) {
               :id="`field-${property.key}`"
               type="color"
               class="field__input field__input--color"
-              :value="selectedNode.styles[property.key] || UNSET_COLOR"
-              @input="handleInput(property.key, $event)"
+              :value="valueOf(selectedNode, property) || UNSET_COLOR"
+              @input="handleInput(property, $event)"
             />
 
             <input
@@ -75,17 +114,17 @@ function handleInput(key: string, event: Event) {
               type="text"
               class="field__input"
               :placeholder="property.placeholder"
-              :value="selectedNode.styles[property.key] ?? ''"
-              @input="handleInput(property.key, $event)"
+              :value="valueOf(selectedNode, property)"
+              @input="handleInput(property, $event)"
             />
 
             <button
               type="button"
               class="field__clear"
-              :disabled="!selectedNode.styles[property.key]"
+              :disabled="!valueOf(selectedNode, property)"
               :aria-label="`Clear ${property.label}`"
               title="Clear"
-              @click="setStyle(property.key, '')"
+              @click="setValue(property, '')"
             >
               ×
             </button>

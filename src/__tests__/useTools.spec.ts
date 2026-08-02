@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it } from 'vitest'
 
 import { TOOLS, useTools } from '../composables/useTools'
-import { frameDisplay } from '../composables/useFrameTool'
+import { DEFAULT_FRAME_LAYOUT, frameLayout } from '../composables/useFrameTool'
 import { ELEMENT_TYPES } from '../composables/useCanvasNodes'
 import { toStyleBinding, STYLE_PROPERTIES } from '../composables/styleSchema'
 
@@ -9,7 +9,7 @@ const { activeToolId, activeTool, arm, disarm, toggle } = useTools()
 
 beforeEach(() => {
   disarm()
-  frameDisplay.value = 'block'
+  frameLayout.value = DEFAULT_FRAME_LAYOUT
 })
 
 describe('useTools', () => {
@@ -41,12 +41,12 @@ describe('useTools', () => {
     }
   })
 
-  it('seeds the display the frame tool currently has selected', () => {
-    frameDisplay.value = 'grid'
-    expect(TOOLS[0]?.seedStyles()).toEqual({ display: 'grid' })
+  it('seeds the layout the frame tool currently has selected', () => {
+    frameLayout.value = 'grid'
+    expect(TOOLS[0]?.seedInit()).toEqual({ layout: 'grid' })
 
-    frameDisplay.value = 'block'
-    expect(TOOLS[0]?.seedStyles()).toEqual({ display: 'block' })
+    frameLayout.value = DEFAULT_FRAME_LAYOUT
+    expect(TOOLS[0]?.seedInit()).toEqual({ layout: DEFAULT_FRAME_LAYOUT })
   })
 
   it('gives every tool a unique id and shortcut', () => {

@@ -3,8 +3,8 @@ import { mount } from '@vue/test-utils'
 import { nextTick } from 'vue'
 
 import FrameToolControl from '../components/FrameToolControl.vue'
-import { DISPLAY_VALUES } from '../composables/styleSchema'
-import { frameDisplay } from '../composables/useFrameTool'
+import { LAYOUT_VALUES } from '../composables/styleSchema'
+import { DEFAULT_FRAME_LAYOUT, frameLayout } from '../composables/useFrameTool'
 import { TOOLS, useTools } from '../composables/useTools'
 
 const { activeToolId, disarm } = useTools()
@@ -19,7 +19,7 @@ function mountControl(orientation: 'horizontal' | 'vertical' = 'horizontal') {
 
 beforeEach(() => {
   disarm()
-  frameDisplay.value = 'block'
+  frameLayout.value = DEFAULT_FRAME_LAYOUT
 })
 
 describe('FrameToolControl', () => {
@@ -54,13 +54,13 @@ describe('FrameToolControl', () => {
   })
 
   it('offers every display value, with the current one checked', async () => {
-    frameDisplay.value = 'grid'
+    frameLayout.value = 'grid'
     const wrapper = mountControl()
 
     await wrapper.get('.toolbar__button').trigger('click')
 
     const radios = wrapper.findAll('input[type="radio"]')
-    expect(radios).toHaveLength(DISPLAY_VALUES.length)
+    expect(radios).toHaveLength(LAYOUT_VALUES.length)
     expect(wrapper.get('input:checked').attributes('value')).toBe('grid')
   })
 
@@ -84,7 +84,7 @@ describe('FrameToolControl', () => {
     await wrapper.get('input[value="flex"]').setValue()
     await nextTick()
 
-    expect(frameDisplay.value).toBe('flex')
+    expect(frameLayout.value).toBe('flex')
     // Closes because the choice reads as "done"; stays armed so the
     // newly chosen display is ready to draw with immediately.
     expect(wrapper.find('.frame-tool__menu').exists()).toBe(false)

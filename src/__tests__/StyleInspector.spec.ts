@@ -3,7 +3,7 @@ import { mount } from '@vue/test-utils'
 import { nextTick } from 'vue'
 
 import StyleInspector from '../components/StyleInspector.vue'
-import { STYLE_PROPERTIES } from '../composables/styleSchema'
+import { propertiesFor } from '../composables/styleSchema'
 import { useCanvasNodes } from '../composables/useCanvasNodes'
 
 const { addNode, selectNode, resetDocument } = useCanvasNodes()
@@ -23,12 +23,13 @@ describe('Inspector', () => {
   })
 
   it('renders one field per schema entry for the selected element', async () => {
-    selectNode(addNode('div').id)
+    const node = addNode('div')
+    selectNode(node.id)
     const wrapper = mount(StyleInspector)
     await nextTick()
 
-    expect(wrapper.findAll('.field')).toHaveLength(STYLE_PROPERTIES.length)
-    for (const property of STYLE_PROPERTIES) {
+    expect(wrapper.findAll('.field')).toHaveLength(propertiesFor(node).length)
+    for (const property of propertiesFor(node)) {
       expect(wrapper.find(`#field-${property.key}`).exists()).toBe(true)
     }
   })
@@ -44,19 +45,26 @@ describe('Inspector', () => {
     expect(element.styles.padding).toBe('1rem')
   })
 
-  it('writes the layout properties the Frame tool introduced', async () => {
+  it('writes node fields to the node, not into styles', async () => {
     const element = addNode('div')
     selectNode(element.id)
     const wrapper = mount(StyleInspector)
     await nextTick()
 
-    await wrapper.get('#field-display').setValue('grid')
+    await wrapper.get('#field-layout').setValue('grid')
+    await wrapper.get('#field-width').setValue('320')
     await wrapper.get('#field-overflow').setValue('auto')
-    await wrapper.get('#field-flexShrink').setValue('0')
 
-    expect(element.styles.display).toBe('grid')
+    // Layout and geometry are first-class fields the canvas reads
+    // directly; writing them into `styles` would put them where nothing
+    // looks, which is the bug this routing exists to prevent.
+    expect(element.layout).toBe('grid')
+    expect(element.width).toBe(320)
+    expect(element.styles.layout).toBeUndefined()
+    expect(element.styles.width).toBeUndefined()
+
+    // Genuine CSS still goes to styles.
     expect(element.styles.overflow).toBe('auto')
-    expect(element.styles.flexShrink).toBe('0')
   })
 
   it('writes a chosen option from a select field', async () => {
