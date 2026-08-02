@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it } from 'vitest'
 
 import { TOOLS, useTools } from '../composables/useTools'
 import { frameDisplay } from '../composables/useFrameTool'
-import { ELEMENT_TYPES } from '../composables/useWorkspaceElements'
+import { ELEMENT_TYPES } from '../composables/useCanvasNodes'
 import { toStyleBinding, STYLE_PROPERTIES } from '../composables/styleSchema'
 
 const { activeToolId, activeTool, arm, disarm, toggle } = useTools()

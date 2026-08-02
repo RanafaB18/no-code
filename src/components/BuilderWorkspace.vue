@@ -2,14 +2,14 @@
 import { computed, ref, useTemplateRef, watch } from 'vue'
 import { useEventListener } from '@vueuse/core'
 
-import WorkspaceElement from '@/components/WorkspaceElement.vue'
+import NodeRenderer from '@/components/NodeRenderer.vue'
 import { onResizeFrame } from '@/composables/useViewport'
 import { useToolShortcuts } from '@/composables/useToolShortcuts'
 import { useTools, type Tool } from '@/composables/useTools'
-import { useWorkspaceElements } from '@/composables/useWorkspaceElements'
+import { useCanvasNodes } from '@/composables/useCanvasNodes'
 
 const { activeTool, disarm } = useTools()
-const { elements, selectedId, selectedElement, addElement, select } = useWorkspaceElements()
+const { rootIds, selectedId, selectedNode, addNode, selectNode } = useCanvasNodes()
 
 const workspace = useTemplateRef<HTMLElement>('workspace')
 
@@ -40,7 +40,7 @@ interface Rect {
  */
 function measureRect(id: string | null): Rect | null {
   const root = workspace.value
-  const node = id ? root?.querySelector<HTMLElement>(`[data-element-id="${id}"]`) : null
+  const node = id ? root?.querySelector<HTMLElement>(`[data-node-id="${id}"]`) : null
   if (!root || !node) return null
 
   const box = node.getBoundingClientRect()
@@ -114,7 +114,7 @@ function resolveDropTarget(event: PointerEvent): HTMLElement | null {
   const target = event.target
   if (!(target instanceof Element)) return null
   // `closest` walks ancestor-or-self, so the innermost frame wins for free.
-  return target.closest<HTMLElement>('[data-element-id]')
+  return target.closest<HTMLElement>('[data-node-id]')
 }
 
 // Re-measure whenever the selection changes, or the selected element's
@@ -125,7 +125,7 @@ function resolveDropTarget(event: PointerEvent): HTMLElement | null {
 // runs *before* the component re-renders, so a newly selected element
 // wouldn't be in the DOM yet. 'post' runs after that render, so the node
 // is queryable by the time this fires.
-watch([selectedId, () => selectedElement.value?.styles], measureSelection, {
+watch([selectedId, () => selectedNode.value?.styles], measureSelection, {
   deep: true,
   flush: 'post',
 })
@@ -228,7 +228,7 @@ function handlePointerDown(event: PointerEvent) {
     // click-based selector would immediately re-select the frame just
     // drawn into and discard the new element's selection. jsdom never
     // synthesises that click, so no test would have caught it.
-    select(resolveDropTarget(event)?.dataset.elementId ?? null)
+    selectNode(resolveDropTarget(event)?.dataset.nodeId ?? null)
     return
   }
 
@@ -241,7 +241,7 @@ function handlePointerDown(event: PointerEvent) {
 
   const target = resolveDropTarget(event)
   dropTargetNode.value = target
-  dropTargetId.value = target?.dataset.elementId ?? null
+  dropTargetId.value = target?.dataset.nodeId ?? null
   dropRect.value = measureRect(dropTargetId.value)
 
   // Captured on the workspace root, not `event.target`: the target may be
@@ -268,10 +268,10 @@ function handlePointerUp(event: PointerEvent) {
   const size = dragSize.value
 
   if (tool && size && size.width >= MIN_DRAG && size.height >= MIN_DRAG) {
-    const created = addElement(tool.creates, creationStyles(tool, size), dropTargetId.value)
+    const created = addNode(tool.creates, creationStyles(tool, size), dropTargetId.value)
     // Hand the new element to the inspector — the tool disarms below, so
     // we land in select mode with the thing just drawn already selected.
-    select(created.id)
+    selectNode(created.id)
     // One draw per arming: the tool releases itself rather than staying
     // armed for another.
     disarm()
@@ -309,7 +309,7 @@ useToolShortcuts(() => {
     <!-- No @click here: selection is delegated to the root handler so the
          innermost element wins, and so this stays a single-prop component
          that can skip re-rendering. -->
-    <WorkspaceElement v-for="element in elements" :key="element.id" :element="element" />
+    <NodeRenderer v-for="id in rootIds" :key="id" :node-id="id" />
 
     <!--
       The ghost renders as the target's last child — exactly where the

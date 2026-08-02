@@ -5,10 +5,10 @@ import { nextTick } from 'vue'
 import BuilderWorkspace from '../components/BuilderWorkspace.vue'
 import { frameDisplay } from '../composables/useFrameTool'
 import { useTools } from '../composables/useTools'
-import { findElement, useWorkspaceElements } from '../composables/useWorkspaceElements'
+import { getNode, useCanvasNodes } from '../composables/useCanvasNodes'
 
 const { activeToolId, arm, disarm } = useTools()
-const { elements, selectedId, addElement, select } = useWorkspaceElements()
+const { rootIds, selectedId, addNode, selectNode, resetDocument } = useCanvasNodes()
 
 type Point = { x: number; y: number }
 
@@ -44,7 +44,7 @@ async function drag(target: Element, from: Point, to: Point) {
 
 /** The rendered node for an element id. */
 function nodeFor(wrapper: VueWrapper, id: string): Element {
-  return wrapper.get(`[data-element-id="${id}"]`).element
+  return wrapper.get(`[data-node-id="${id}"]`).element
 }
 
 function pressKey(key: string) {
@@ -52,8 +52,8 @@ function pressKey(key: string) {
 }
 
 beforeEach(() => {
-  elements.value.splice(0)
-  select(null)
+  resetDocument()
+  selectNode(null)
   disarm()
   // Module-level singleton like the armed tool, so it leaks between tests.
   frameDisplay.value = 'block'
@@ -65,7 +65,7 @@ describe('Workspace', () => {
 
     await drag(wrapper.element, { x: 10, y: 10 }, { x: 110, y: 80 })
 
-    expect(elements.value).toHaveLength(0)
+    expect(rootIds.value).toHaveLength(0)
   })
 
   it('turns an armed drag into an element sized from the gesture', async () => {
@@ -74,10 +74,10 @@ describe('Workspace', () => {
 
     await drag(wrapper.element, { x: 10, y: 10 }, { x: 110, y: 80 })
 
-    expect(elements.value).toHaveLength(1)
+    expect(rootIds.value).toHaveLength(1)
     // Width is explicit; height becomes min-height so content can still
     // grow the box. `display` is seeded by the tool.
-    expect(elements.value[0]?.styles).toEqual({
+    expect(getNode(rootIds.value[0])?.styles).toEqual({
       display: 'block',
       width: '100px',
       minHeight: '70px',
@@ -90,7 +90,7 @@ describe('Workspace', () => {
 
     await drag(wrapper.element, { x: 110, y: 80 }, { x: 10, y: 10 })
 
-    expect(elements.value[0]?.styles).toEqual({
+    expect(getNode(rootIds.value[0])?.styles).toEqual({
       display: 'block',
       width: '100px',
       minHeight: '70px',
@@ -103,7 +103,7 @@ describe('Workspace', () => {
 
     await drag(wrapper.element, { x: 10, y: 10 }, { x: 12, y: 12 })
 
-    expect(elements.value).toHaveLength(0)
+    expect(rootIds.value).toHaveLength(0)
   })
 
   it('disarms after one draw, so a second drag creates nothing', async () => {
@@ -114,7 +114,7 @@ describe('Workspace', () => {
     expect(activeToolId.value).toBeNull()
 
     await drag(wrapper.element, { x: 0, y: 0 }, { x: 100, y: 50 })
-    expect(elements.value).toHaveLength(1)
+    expect(rootIds.value).toHaveLength(1)
   })
 
   it('selects the element it just drew', async () => {
@@ -123,7 +123,7 @@ describe('Workspace', () => {
 
     await drag(wrapper.element, { x: 0, y: 0 }, { x: 100, y: 50 })
 
-    expect(selectedId.value).toBe(elements.value[0]?.id)
+    expect(selectedId.value).toBe(rootIds.value[0])
   })
 
   it('shows a live ghost while dragging and removes it on release', async () => {
@@ -150,16 +150,16 @@ describe('Workspace', () => {
     await drag(wrapper.element, { x: 0, y: 0 }, { x: 100, y: 50 })
 
     // Drawing disarms and selects; clear it to test selection on its own.
-    select(null)
+    selectNode(null)
     await nextTick()
 
     // pointerdown, not click: a click is synthesised after every drag and
     // would fire once the tool had already disarmed, re-selecting the
     // frame that was drawn into.
-    firePointer(wrapper.get('.workspace-element').element, 'pointerdown', { x: 5, y: 5 })
+    firePointer(wrapper.get('.canvas-node').element, 'pointerdown', { x: 5, y: 5 })
     await nextTick()
 
-    expect(selectedId.value).toBe(elements.value[0]?.id)
+    expect(selectedId.value).toBe(rootIds.value[0])
   })
 
   it('shows a selection frame with 8 handles once something is selected', async () => {
@@ -167,13 +167,13 @@ describe('Workspace', () => {
 
     expect(wrapper.find('.workspace__selection').exists()).toBe(false)
 
-    select(addElement('div').id)
+    selectNode(addNode('div').id)
     await nextTick()
 
     const selection = wrapper.get('.workspace__selection')
     expect(selection.findAll('.workspace__handle')).toHaveLength(8)
 
-    select(null)
+    selectNode(null)
     await nextTick()
     expect(wrapper.find('.workspace__selection').exists()).toBe(false)
   })
@@ -181,16 +181,16 @@ describe('Workspace', () => {
   it('never renders selection handles as children of the drawn element', async () => {
     const wrapper = mount(BuilderWorkspace, { attachTo: document.body })
 
-    select(addElement('div').id)
+    selectNode(addNode('div').id)
     await nextTick()
 
     // The selected element is real content the user is authoring; the
     // frame must be a sibling overlay, not something injected into it.
-    expect(wrapper.get('.workspace-element').findAll('.workspace__handle')).toHaveLength(0)
+    expect(wrapper.get('.canvas-node').findAll('.workspace__handle')).toHaveLength(0)
   })
 
   it('nests the new element into the frame the drag started in', async () => {
-    const parent = addElement('div')
+    const parent = addNode('div')
     const wrapper = mount(BuilderWorkspace, { attachTo: document.body })
     await nextTick()
 
@@ -198,39 +198,39 @@ describe('Workspace', () => {
     await drag(nodeFor(wrapper, parent.id), { x: 0, y: 0 }, { x: 100, y: 50 })
 
     // Root does not grow — the element went inside.
-    expect(elements.value).toHaveLength(1)
-    expect(elements.value[0]?.children).toHaveLength(1)
+    expect(rootIds.value).toHaveLength(1)
+    expect(getNode(rootIds.value[0])?.childrenIds).toHaveLength(1)
   })
 
   it('nests into the innermost frame when frames are nested', async () => {
-    const outer = addElement('div')
-    const inner = addElement('div', {}, outer.id)
+    const outer = addNode('div')
+    const inner = addNode('div', {}, outer.id)
     const wrapper = mount(BuilderWorkspace, { attachTo: document.body })
     await nextTick()
 
     arm('frame')
     await drag(nodeFor(wrapper, inner.id), { x: 0, y: 0 }, { x: 100, y: 50 })
 
-    expect(findElement(inner.id)?.children).toHaveLength(1)
+    expect(getNode(inner.id)?.childrenIds).toHaveLength(1)
     // The outer frame gained nothing beyond the inner one it already had.
-    expect(findElement(outer.id)?.children).toHaveLength(1)
+    expect(getNode(outer.id)?.childrenIds).toHaveLength(1)
   })
 
   it('still appends at the root when the drag starts on bare workspace', async () => {
-    addElement('div')
+    addNode('div')
     const wrapper = mount(BuilderWorkspace, { attachTo: document.body })
     await nextTick()
 
     arm('frame')
     await drag(wrapper.element, { x: 0, y: 0 }, { x: 100, y: 50 })
 
-    expect(elements.value).toHaveLength(2)
-    expect(elements.value[0]?.children).toHaveLength(0)
+    expect(rootIds.value).toHaveLength(2)
+    expect(getNode(rootIds.value[0])?.childrenIds).toHaveLength(0)
   })
 
   it('selects the innermost element pressed, not an ancestor', async () => {
-    const outer = addElement('div')
-    const inner = addElement('div', {}, outer.id)
+    const outer = addNode('div')
+    const inner = addNode('div', {}, outer.id)
     const wrapper = mount(BuilderWorkspace, { attachTo: document.body })
     await nextTick()
 
@@ -241,7 +241,7 @@ describe('Workspace', () => {
   })
 
   it('highlights the target frame while drawing into it, and clears after', async () => {
-    const parent = addElement('div')
+    const parent = addNode('div')
     const wrapper = mount(BuilderWorkspace, { attachTo: document.body })
     await nextTick()
 
@@ -266,7 +266,7 @@ describe('Workspace', () => {
   })
 
   it('renders the ghost inside the target frame, and at the root otherwise', async () => {
-    const parent = addElement('div')
+    const parent = addNode('div')
     const wrapper = mount(BuilderWorkspace, { attachTo: document.body })
     await nextTick()
 
@@ -292,7 +292,7 @@ describe('Workspace', () => {
     arm('frame')
     await drag(wrapper.element, { x: 0, y: 0 }, { x: 100, y: 50 })
 
-    expect(elements.value[0]?.styles).toEqual({
+    expect(getNode(rootIds.value[0])?.styles).toEqual({
       display: 'flex',
       width: '100px',
       minHeight: '50px',
@@ -304,7 +304,7 @@ describe('Workspace', () => {
     arm('frame')
     await drag(wrapper.element, { x: 0, y: 0 }, { x: 100, y: 50 })
 
-    expect(elements.value[1]?.styles).toEqual({ display: 'inline' })
+    expect(getNode(rootIds.value[1])?.styles).toEqual({ display: 'inline' })
   })
 
   it('clears the selection when pressing on bare workspace', async () => {
@@ -370,6 +370,6 @@ describe('Workspace', () => {
     firePointer(wrapper.element, 'pointerup', { x: 100, y: 100 })
     await nextTick()
 
-    expect(elements.value).toHaveLength(0)
+    expect(rootIds.value).toHaveLength(0)
   })
 })

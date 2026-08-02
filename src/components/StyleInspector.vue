@@ -2,9 +2,9 @@
 import DraggablePanel from '@/components/DraggablePanel.vue'
 import { STYLE_PROPERTIES } from '@/composables/styleSchema'
 import { anchorRightMiddle } from '@/composables/useDraggablePanel'
-import { useWorkspaceElements } from '@/composables/useWorkspaceElements'
+import { useCanvasNodes } from '@/composables/useCanvasNodes'
 
-const { selectedElement, updateStyle } = useWorkspaceElements()
+const { selectedNode, updateStyle } = useCanvasNodes()
 
 /**
  * `<input type="color">` has no empty state — given '' it falls back to
@@ -15,9 +15,9 @@ const { selectedElement, updateStyle } = useWorkspaceElements()
 const UNSET_COLOR = '#000000'
 
 function setStyle(key: string, value: string) {
-  const element = selectedElement.value
-  if (!element) return
-  updateStyle(element.id, key, value)
+  const node = selectedNode.value
+  if (!node) return
+  updateStyle(node.id, key, value)
 }
 
 function handleInput(key: string, event: Event) {
@@ -35,10 +35,10 @@ function handleInput(key: string, event: Event) {
       <h2 class="inspector__title">Inspector</h2>
     </template>
 
-    <p v-if="!selectedElement" class="inspector__empty">Select an element to edit its styles.</p>
+    <p v-if="!selectedNode" class="inspector__empty">Select an element to edit its styles.</p>
 
     <template v-else>
-      <p class="inspector__type">&lt;{{ selectedElement.type }}&gt;</p>
+      <p class="inspector__type">&lt;{{ selectedNode.type }}&gt;</p>
 
       <!-- Rendered from STYLE_PROPERTIES, so adding an editable property
            is one entry in the schema rather than a change here. -->
@@ -51,7 +51,7 @@ function handleInput(key: string, event: Event) {
               v-if="property.input === 'select'"
               :id="`field-${property.key}`"
               class="field__input"
-              :value="selectedElement.styles[property.key] ?? ''"
+              :value="selectedNode.styles[property.key] ?? ''"
               @change="handleInput(property.key, $event)"
             >
               <option value="">—</option>
@@ -65,7 +65,7 @@ function handleInput(key: string, event: Event) {
               :id="`field-${property.key}`"
               type="color"
               class="field__input field__input--color"
-              :value="selectedElement.styles[property.key] || UNSET_COLOR"
+              :value="selectedNode.styles[property.key] || UNSET_COLOR"
               @input="handleInput(property.key, $event)"
             />
 
@@ -75,14 +75,14 @@ function handleInput(key: string, event: Event) {
               type="text"
               class="field__input"
               :placeholder="property.placeholder"
-              :value="selectedElement.styles[property.key] ?? ''"
+              :value="selectedNode.styles[property.key] ?? ''"
               @input="handleInput(property.key, $event)"
             />
 
             <button
               type="button"
               class="field__clear"
-              :disabled="!selectedElement.styles[property.key]"
+              :disabled="!selectedNode.styles[property.key]"
               :aria-label="`Clear ${property.label}`"
               title="Clear"
               @click="setStyle(property.key, '')"

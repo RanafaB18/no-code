@@ -1,7 +1,7 @@
 import { computed, ref } from 'vue'
 
 import { frameDisplay } from './useFrameTool'
-import type { ElementType } from './useWorkspaceElements'
+import type { ElementType } from './useCanvasNodes'
 
 export interface Tool {
   /**

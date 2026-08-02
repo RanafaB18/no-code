@@ -9,7 +9,7 @@ import { nextTick } from 'vue'
 /**
  * Counts how often a style binding is rebuilt.
  *
- * Guards the reason WorkspaceElement exists as its own component: built
+ * Guards the reason NodeRenderer exists as its own component: built
  * inline in the parent's v-for, the binding was recomputed for every
  * element on every workspace re-render — including each pointermove
  * while drawing, since the drag ghost updates then. As a computed on a
@@ -30,23 +30,26 @@ vi.mock('@/composables/styleSchema', async (importOriginal) => {
 
 const { default: BuilderWorkspace } = await import('../components/BuilderWorkspace.vue')
 const { useTools } = await import('../composables/useTools')
-const { useWorkspaceElements } = await import('../composables/useWorkspaceElements')
+const { useCanvasNodes } = await import('../composables/useCanvasNodes')
 
 const { arm, disarm } = useTools()
-const { elements, addElement, select, updateStyle } = useWorkspaceElements()
+const { addNode, selectNode, updateStyle, resetDocument } = useCanvasNodes()
 
 const EXISTING = 20
 
 /**
- * Invariants these tests exist to protect, all in WorkspaceElement.vue:
+ * Invariants these tests exist to protect, all in NodeRenderer.vue:
  *
- *  - `:element` is its ONLY prop. Adding one that varies per render
- *    (a `:selected` or `:highlighted` flag) makes every element in the
- *    document re-render whenever that value changes.
+ *  - `:nodeId` is its ONLY prop, and it is a **string**. It must never
+ *    become an object: a primitive cannot change identity, which is what
+ *    stops a parent's re-render from cascading into its children.
+ *  - Node data is looked up per-renderer from the store, never passed
+ *    down. A `:selected` or `:highlighted` prop would make every node in
+ *    the document re-render whenever that value changed.
  *  - No inline handlers in a `v-for` — an arrow is a fresh function each
  *    render and defeats Vue's props-identity check.
- *  - `:key` is the element id.
- *  - `styleBinding` depends on nothing but `props.element.styles`.
+ *  - `:key` is the node id.
+ *  - `styleBinding` depends on nothing but that one node's `styles`.
  *  - Overlays (selection frame, drop highlight) are siblings, never
  *    props; the drag ghost teleports rather than being passed down.
  */
@@ -57,7 +60,7 @@ function buildTree(roots: number, depth: number) {
   for (let r = 0; r < roots; r += 1) {
     let parentId: string | null = null
     for (let d = 0; d < depth; d += 1) {
-      parentId = addElement('div', { width: `${r * 10 + d}px` }, parentId).id
+      parentId = addNode('div', { width: `${r * 10 + d}px` }, parentId).id
     }
     if (parentId) leaves.push(parentId)
   }
@@ -78,15 +81,15 @@ function fire(target: Element, type: string, x: number, y: number) {
 }
 
 beforeEach(() => {
-  elements.value.splice(0)
-  select(null)
+  resetDocument()
+  selectNode(null)
   disarm()
   bindingCalls.count = 0
 })
 
 describe('workspace rendering cost', () => {
   it('does not rebuild every element on each frame of a draw-drag', async () => {
-    for (let i = 0; i < EXISTING; i += 1) addElement('div', { width: `${i + 10}px` })
+    for (let i = 0; i < EXISTING; i += 1) addNode('div', { width: `${i + 10}px` })
 
     const wrapper = mount(BuilderWorkspace)
     await nextTick()
@@ -137,9 +140,9 @@ describe('workspace rendering cost', () => {
 
     // Pressing inside a frame sets the drop target and teleports the
     // ghost into it. Fails if the highlight is ever reimplemented as a
-    // prop on WorkspaceElement, or if the ghost is passed down the tree
+    // prop on NodeRenderer, or if the ghost is passed down the tree
     // instead of teleported — either would re-render all 20 per frame.
-    const node = wrapper.get(`[data-element-id="${target}"]`).element
+    const node = wrapper.get(`[data-node-id="${target}"]`).element
     fire(node, 'pointerdown', 0, 0)
     for (let i = 1; i <= 10; i += 1) {
       fire(node, 'pointermove', i * 10, i * 5)
@@ -161,9 +164,9 @@ describe('workspace rendering cost', () => {
 
     // Selection is an overlay measured from the DOM, not element state.
     // Fails if anyone adds a per-element `:selected` prop.
-    select(deepest)
+    selectNode(deepest)
     await nextTick()
-    select(null)
+    selectNode(null)
     await nextTick()
 
     expect(bindingCalls.count).toBe(0)

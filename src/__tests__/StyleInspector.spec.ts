@@ -4,13 +4,13 @@ import { nextTick } from 'vue'
 
 import StyleInspector from '../components/StyleInspector.vue'
 import { STYLE_PROPERTIES } from '../composables/styleSchema'
-import { useWorkspaceElements } from '../composables/useWorkspaceElements'
+import { useCanvasNodes } from '../composables/useCanvasNodes'
 
-const { elements, addElement, select } = useWorkspaceElements()
+const { addNode, selectNode, resetDocument } = useCanvasNodes()
 
 beforeEach(() => {
-  elements.value.splice(0)
-  select(null)
+  resetDocument()
+  selectNode(null)
   localStorage.clear()
 })
 
@@ -23,7 +23,7 @@ describe('Inspector', () => {
   })
 
   it('renders one field per schema entry for the selected element', async () => {
-    select(addElement('div').id)
+    selectNode(addNode('div').id)
     const wrapper = mount(StyleInspector)
     await nextTick()
 
@@ -34,8 +34,8 @@ describe('Inspector', () => {
   })
 
   it('writes a typed value onto the selected element', async () => {
-    const element = addElement('div')
-    select(element.id)
+    const element = addNode('div')
+    selectNode(element.id)
     const wrapper = mount(StyleInspector)
     await nextTick()
 
@@ -45,8 +45,8 @@ describe('Inspector', () => {
   })
 
   it('writes the layout properties the Frame tool introduced', async () => {
-    const element = addElement('div')
-    select(element.id)
+    const element = addNode('div')
+    selectNode(element.id)
     const wrapper = mount(StyleInspector)
     await nextTick()
 
@@ -60,8 +60,8 @@ describe('Inspector', () => {
   })
 
   it('writes a chosen option from a select field', async () => {
-    const element = addElement('div')
-    select(element.id)
+    const element = addNode('div')
+    selectNode(element.id)
     const wrapper = mount(StyleInspector)
     await nextTick()
 
@@ -71,8 +71,8 @@ describe('Inspector', () => {
   })
 
   it('clears a property back to unset', async () => {
-    const element = addElement('div', { padding: '2rem' })
-    select(element.id)
+    const element = addNode('div', { padding: '2rem' })
+    selectNode(element.id)
     const wrapper = mount(StyleInspector)
     await nextTick()
 
@@ -85,7 +85,7 @@ describe('Inspector', () => {
   })
 
   it('disables the clear button while a property is unset', async () => {
-    select(addElement('div').id)
+    selectNode(addNode('div').id)
     const wrapper = mount(StyleInspector)
     await nextTick()
 
