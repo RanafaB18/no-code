@@ -2,6 +2,8 @@
 import { computed, nextTick, ref, useTemplateRef } from 'vue'
 
 import DraggablePanel from '@/components/DraggablePanel.vue'
+import FrameToolControl from '@/components/FrameToolControl.vue'
+import ToolButton from '@/components/ToolButton.vue'
 import { anchorTopCenter } from '@/composables/useDraggablePanel'
 import { TOOLS, useTools } from '@/composables/useTools'
 
@@ -39,20 +41,22 @@ function toggleOrientation() {
 
     <!-- Rendered from TOOLS, so a new tool appears by adding one entry.
          aria-pressed rather than a radiogroup: a tool can be toggled off
-         entirely, leaving idle/select mode, which radios can't express. -->
-    <button
-      v-for="tool in TOOLS"
-      :key="tool.id"
-      type="button"
-      class="toolbar__button"
-      :class="{ 'toolbar__button--active': activeToolId === tool.id }"
-      :aria-pressed="activeToolId === tool.id"
-      :aria-keyshortcuts="tool.shortcut"
-      :title="`${tool.label} (${tool.shortcut})`"
-      @click="toggle(tool.id)"
-    >
-      <span>{{ tool.label }}</span><sub class="toolbar__shortcut">{{ tool.shortcut }}</sub>
-    </button>
+         entirely, leaving idle/select mode, which radios can't express.
+
+         Tools with variants get their own control; the generic button is
+         the fallback for tools that just arm and draw. -->
+    <template v-for="tool in TOOLS" :key="tool.id">
+      <FrameToolControl v-if="tool.id === 'frame'" :tool="tool" :orientation="orientation" />
+
+      <ToolButton
+        v-else
+        :label="tool.label"
+        :shortcut="tool.shortcut"
+        :active="activeToolId === tool.id"
+        :title="`${tool.label} (${tool.shortcut})`"
+        @click="toggle(tool.id)"
+      />
+    </template>
 
     <button
       type="button"
@@ -91,46 +95,6 @@ function toggleOrientation() {
   justify-content: center;
   padding: 0.25rem;
   color: var(--color-fg-subtle);
-}
-
-.toolbar__button {
-  position: relative;
-  display: inline-flex;
-  align-items: center;
-  /* Extra right padding keeps the label clear of the corner shortcut. */
-  padding: 0.375rem 0.9rem 0.375rem 0.75rem;
-  font-size: 0.875rem;
-  line-height: 1.25rem;
-  color: var(--color-fg-muted);
-  background-color: transparent;
-  border-radius: 0.375rem;
-  cursor: pointer;
-}
-
-.toolbar__button:hover {
-  color: var(--color-fg-default);
-}
-
-.toolbar__button--active {
-  color: var(--color-fg-on-accent);
-  background-color: var(--color-accent);
-}
-
-.toolbar__button--active:hover {
-  color: var(--color-fg-on-accent);
-  background-color: var(--color-accent-hover);
-}
-
-/* Tucked into the button's bottom-right corner rather than trailing the
-   label, so it reads as an annotation on the tool instead of part of its
-   name. Absolutely positioned, so <sub>'s own baseline shift is moot. */
-.toolbar__shortcut {
-  position: absolute;
-  right: 0.3rem;
-  bottom: 0.15rem;
-  font-size: 0.5625rem;
-  line-height: 1;
-  opacity: 0.6;
 }
 
 .toolbar__orientation {

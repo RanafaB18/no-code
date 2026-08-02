@@ -44,6 +44,21 @@ describe('Inspector', () => {
     expect(element.styles.padding).toBe('1rem')
   })
 
+  it('writes the layout properties the Frame tool introduced', async () => {
+    const element = addElement('div')
+    select(element.id)
+    const wrapper = mount(StyleInspector)
+    await nextTick()
+
+    await wrapper.get('#field-display').setValue('grid')
+    await wrapper.get('#field-overflow').setValue('auto')
+    await wrapper.get('#field-flexShrink').setValue('0')
+
+    expect(element.styles.display).toBe('grid')
+    expect(element.styles.overflow).toBe('auto')
+    expect(element.styles.flexShrink).toBe('0')
+  })
+
   it('writes a chosen option from a select field', async () => {
     const element = addElement('div')
     select(element.id)

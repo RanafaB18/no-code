@@ -5,7 +5,7 @@ import { useEventListener } from '@vueuse/core'
 import WorkspaceElement from '@/components/WorkspaceElement.vue'
 import { onResizeFrame } from '@/composables/useViewport'
 import { useToolShortcuts } from '@/composables/useToolShortcuts'
-import { useTools } from '@/composables/useTools'
+import { useTools, type Tool } from '@/composables/useTools'
 import { useWorkspaceElements } from '@/composables/useWorkspaceElements'
 
 const { activeTool, disarm } = useTools()
@@ -13,40 +13,69 @@ const { elements, selectedId, selectedElement, addElement, select } = useWorkspa
 
 const workspace = useTemplateRef<HTMLElement>('workspace')
 
+interface Rect {
+  left: number
+  top: number
+  width: number
+  height: number
+}
+
 /**
- * The selection frame's box, in pixels relative to `.workspace`.
+ * An element's box in pixels relative to `.workspace`.
  *
- * Read via offsetLeft/offsetTop/offsetWidth/offsetHeight rather than
- * `getBoundingClientRect`: with `.workspace` as the positioned ancestor
- * (`position: relative`), those offsets already are workspace-relative
- * coordinates, with no viewport/scroll conversion to get wrong.
+ * Both rects are viewport-relative, so subtracting them cancels page
+ * scroll — and unlike offsetLeft/offsetTop the result holds regardless of
+ * which ancestor happens to be the offsetParent. That assumption was only
+ * ever true because elements were `position: static` with `.workspace` as
+ * the nearest positioned ancestor; nesting and an editable `display`
+ * (one day `position`) both undermine it.
  *
- * This deliberately does NOT render as children of the selected element.
- * That element is a real DOM node the user is authoring — the div that
- * was drawn — so decorative handles can't live inside it without
- * appearing in the user's own content. The frame is a sibling overlay
- * instead, positioned to match.
+ * `clientLeft`/`clientTop` subtract the workspace's own border, since an
+ * absolutely positioned overlay is placed from the padding box.
+ *
+ * Looked up by attribute rather than a ref-callback map: an inline `:ref`
+ * arrow is a new function each render, so Vue would tear the entry down
+ * and rebuild it on every re-render. This costs one query, only when
+ * something actually needs measuring.
  */
-const selectionRect = ref<{ left: number; top: number; width: number; height: number } | null>(
-  null,
-)
+function measureRect(id: string | null): Rect | null {
+  const root = workspace.value
+  const node = id ? root?.querySelector<HTMLElement>(`[data-element-id="${id}"]`) : null
+  if (!root || !node) return null
+
+  const box = node.getBoundingClientRect()
+  const origin = root.getBoundingClientRect()
+  return {
+    left: box.left - origin.left - root.clientLeft,
+    top: box.top - origin.top - root.clientTop,
+    width: box.width,
+    height: box.height,
+  }
+}
+
+/** Turns a measured rect into overlay positioning, grown by `gap` a side. */
+function frameStyle(rect: Rect | null, gap: number) {
+  if (!rect) return null
+  return {
+    left: `${rect.left - gap}px`,
+    top: `${rect.top - gap}px`,
+    width: `${rect.width + gap * 2}px`,
+    height: `${rect.height + gap * 2}px`,
+  }
+}
+
+/**
+ * The selection frame's box.
+ *
+ * Deliberately NOT rendered as children of the selected element: that
+ * element is a real DOM node the user is authoring, so decorative handles
+ * can't live inside it without appearing in the user's own content. The
+ * frame is a sibling overlay, positioned to match.
+ */
+const selectionRect = ref<Rect | null>(null)
 
 function measureSelection() {
-  const id = selectedId.value
-  // Looked up by attribute rather than tracked in a ref-callback map: an
-  // inline `:ref` arrow is a new function each render, so Vue tears the
-  // entry down and rebuilds it on every re-render. This costs one query,
-  // and only when the selection actually needs re-measuring.
-  const node = id ? workspace.value?.querySelector<HTMLElement>(`[data-element-id="${id}"]`) : null
-
-  selectionRect.value = node
-    ? {
-        left: node.offsetLeft,
-        top: node.offsetTop,
-        width: node.offsetWidth,
-        height: node.offsetHeight,
-      }
-    : null
+  selectionRect.value = measureRect(selectedId.value)
 }
 
 /**
@@ -54,21 +83,39 @@ function measureSelection() {
  *
  * `selectionRect` stays an honest measurement of the element itself —
  * future resize handles would need the real bounds, not an inflated
- * one — so the gap is applied only where the frame is actually rendered,
- * expanding it outward on every side rather than flush against the box.
+ * one — so the gap is applied only where the frame is rendered.
  */
 const SELECTION_GAP = 4
 
-const selectionFrameStyle = computed(() => {
-  const rect = selectionRect.value
-  if (!rect) return null
-  return {
-    left: `${rect.left - SELECTION_GAP}px`,
-    top: `${rect.top - SELECTION_GAP}px`,
-    width: `${rect.width + SELECTION_GAP * 2}px`,
-    height: `${rect.height + SELECTION_GAP * 2}px`,
-  }
-})
+const selectionFrameStyle = computed(() => frameStyle(selectionRect.value, SELECTION_GAP))
+
+/**
+ * The frame a new element will be nested into, resolved once when the
+ * drag begins.
+ *
+ * Resolved at pointerdown rather than tracked live because
+ * `setPointerCapture` retargets every later pointer event to the capture
+ * element — `event.target` on pointermove would always be the workspace
+ * root, so live `closest()` tracking cannot work. Pressing to choose the
+ * parent also matches the existing rule that a drag's position is
+ * ignored and only its size is used.
+ *
+ * The node is kept alongside the id because the ghost teleports into it.
+ */
+const dropTargetId = ref<string | null>(null)
+const dropTargetNode = ref<HTMLElement | null>(null)
+const dropRect = ref<Rect | null>(null)
+
+/** Drawn flush, so it reads as an inner fill inside any selection frame. */
+const dropFrameStyle = computed(() => frameStyle(dropRect.value, 0))
+
+/** The innermost element under the pointer, or null for bare workspace. */
+function resolveDropTarget(event: PointerEvent): HTMLElement | null {
+  const target = event.target
+  if (!(target instanceof Element)) return null
+  // `closest` walks ancestor-or-self, so the innermost frame wins for free.
+  return target.closest<HTMLElement>('[data-element-id]')
+}
 
 // Re-measure whenever the selection changes, or the selected element's
 // own styles change (padding/border/width edits from the inspector move
@@ -140,20 +187,48 @@ function sizeToStyles(size: { width: number; height: number }) {
   return { width: `${size.width}px`, minHeight: `${size.height}px` }
 }
 
+/**
+ * The tool's seed styles plus the drag's size.
+ *
+ * Size second, so the gesture — the more specific intent — wins if a
+ * tool ever seeds a width of its own.
+ *
+ * `inline` is the exception. Width and height do not apply to
+ * non-replaced inline boxes, so emitting them would put CSS in the
+ * inspector that the browser silently ignores: a value you can read but
+ * never observe. Better to emit nothing than to lie. The element is
+ * still created and selected; adding padding gives it a box.
+ */
+function creationStyles(tool: Tool, size: { width: number; height: number }) {
+  const seed = tool.seedStyles()
+  if (seed.display === 'inline') return seed
+  return { ...seed, ...sizeToStyles(size) }
+}
+
 const ghostStyle = computed(() => (dragSize.value ? sizeToStyles(dragSize.value) : null))
 
 function clearDrag() {
   dragOrigin.value = null
   dragCurrent.value = null
+  dropTargetId.value = null
+  dropTargetNode.value = null
+  dropRect.value = null
 }
 
 function handlePointerDown(event: PointerEvent) {
   if (!activeTool.value) {
-    // Idle mode: pressing on bare workspace clears the selection.
-    // Deliberately on pointerdown rather than click — a click is
-    // synthesised after every drag, so doing this on click would wipe
-    // the selection of the element the drag had just created.
-    if (event.target === event.currentTarget) select(null)
+    // Idle mode: selection is delegated here rather than bound per
+    // element, so the innermost element under the pointer wins — a
+    // per-element handler would fire for the child *and* every ancestor
+    // it bubbles through. Pressing bare workspace resolves to null and
+    // clears.
+    //
+    // Deliberately pointerdown rather than click. A click is synthesised
+    // after every drag, and it fires *after* the tool has disarmed, so a
+    // click-based selector would immediately re-select the frame just
+    // drawn into and discard the new element's selection. jsdom never
+    // synthesises that click, so no test would have caught it.
+    select(resolveDropTarget(event)?.dataset.elementId ?? null)
     return
   }
 
@@ -164,11 +239,18 @@ function handlePointerDown(event: PointerEvent) {
   dragOrigin.value = { x: event.clientX, y: event.clientY }
   dragCurrent.value = { x: event.clientX, y: event.clientY }
 
-  // Keeps the drag alive if the pointer leaves the workspace mid-gesture.
-  // jsdom doesn't implement pointer capture, hence the guard.
-  if (event.target instanceof Element) {
+  const target = resolveDropTarget(event)
+  dropTargetNode.value = target
+  dropTargetId.value = target?.dataset.elementId ?? null
+  dropRect.value = measureRect(dropTargetId.value)
+
+  // Captured on the workspace root, not `event.target`: the target may be
+  // a child element that re-renders mid-drag, and the root is the stable
+  // owner of the gesture. Keeps the drag alive if the pointer leaves the
+  // window. jsdom doesn't implement pointer capture, hence the guard.
+  if (event.currentTarget instanceof Element) {
     try {
-      event.target.setPointerCapture(event.pointerId)
+      event.currentTarget.setPointerCapture(event.pointerId)
     } catch {
       // Unsupported here; the drag still works, it just won't follow the
       // pointer outside the element.
@@ -186,7 +268,7 @@ function handlePointerUp(event: PointerEvent) {
   const size = dragSize.value
 
   if (tool && size && size.width >= MIN_DRAG && size.height >= MIN_DRAG) {
-    const created = addElement(tool.id, sizeToStyles(size))
+    const created = addElement(tool.creates, creationStyles(tool, size), dropTargetId.value)
     // Hand the new element to the inspector — the tool disarms below, so
     // we land in select mode with the thing just drawn already selected.
     select(created.id)
@@ -195,21 +277,15 @@ function handlePointerUp(event: PointerEvent) {
     disarm()
   }
 
-  if (event.target instanceof Element) {
+  if (event.currentTarget instanceof Element) {
     try {
-      event.target.releasePointerCapture(event.pointerId)
+      event.currentTarget.releasePointerCapture(event.pointerId)
     } catch {
       // See handlePointerDown.
     }
   }
 
   clearDrag()
-}
-
-/** Selection only applies in idle mode; while armed, clicks draw. */
-function handleElementClick(id: string) {
-  if (activeTool.value) return
-  select(id)
 }
 
 useToolShortcuts(() => {
@@ -230,19 +306,43 @@ useToolShortcuts(() => {
     @dragstart.prevent
     @selectstart.prevent
   >
-    <WorkspaceElement
-      v-for="element in elements"
-      :key="element.id"
-      :element="element"
-      @click="handleElementClick(element.id)"
-    />
+    <!-- No @click here: selection is delegated to the root handler so the
+         innermost element wins, and so this stays a single-prop component
+         that can skip re-rendering. -->
+    <WorkspaceElement v-for="element in elements" :key="element.id" :element="element" />
 
     <!--
-      The ghost renders last, which is exactly where the real element
-      will be appended — so the preview shows the true landing spot
-      rather than promising a position the flow won't honour.
+      The ghost renders as the target's last child — exactly where the
+      real element will be appended — so the preview is laid out by that
+      frame's own flex/grid rules and lands where it appears to.
+
+      Teleport rather than passing the target down the tree: the ghost
+      stays part of this component's render and is merely *placed*
+      elsewhere in the DOM, so the target element's render function is
+      never invoked. Prop-drilling a ghost target would re-render every
+      element on every frame of every drag.
+
+      The element is passed, not a selector string — a selector resolves
+      via document.querySelector and would need the workspace attached to
+      the document.
+
+      This is a deliberate, narrow exception to the rule that keeps the
+      selection frame out of authored content: the ghost has to
+      participate in layout to preview it at all, it is transient, and it
+      lives outside the `elements` tree, so an export walking that tree
+      can never see it. Do not "fix" it into a sibling.
     -->
-    <div v-if="ghostStyle" class="workspace__ghost" :style="ghostStyle" />
+    <Teleport v-if="dropTargetNode" :to="dropTargetNode">
+      <div v-if="ghostStyle" class="workspace__ghost" :style="ghostStyle" />
+    </Teleport>
+    <div v-else-if="ghostStyle" class="workspace__ghost" :style="ghostStyle" />
+
+    <!--
+      The frame about to receive the element. Drawn flush and only when
+      nesting — a root-level drop shows nothing, since the ghost sitting
+      at the page end already says so.
+    -->
+    <div v-if="dropFrameStyle" class="workspace__drop-target" :style="dropFrameStyle" />
 
     <!--
       Selection frame: a sibling overlay, not a child of the selected
@@ -276,12 +376,11 @@ useToolShortcuts(() => {
   user-select: none;
 }
 
-/* While armed, pointer events pass straight through to the workspace so
-   a drag that starts on top of an existing element still draws instead
-   of selecting it. Targets the child component's root by class. */
-.workspace--armed :deep(.workspace-element) {
-  pointer-events: none;
-}
+/* Elements deliberately keep their pointer events while armed. Events
+   bubble to the root where every handler lives and selection is guarded
+   by `activeTool`, so a drag starting on an element still draws — and
+   `event.target` stays informative, which is what makes resolving the
+   drop target possible at all. */
 
 .workspace__ghost {
   outline: 1px dashed var(--color-accent);
@@ -300,6 +399,18 @@ useToolShortcuts(() => {
 .workspace__selection {
   position: absolute;
   border: 1px solid var(--color-accent);
+  pointer-events: none;
+}
+
+/* Flush and filled, versus the selection frame's offset border — so an
+   element that is both selected and the drop target reads as an inner
+   highlight inside an outer frame rather than two fighting outlines.
+   The tint stays low because it paints over the frame's children too. */
+.workspace__drop-target {
+  position: absolute;
+  outline: 2px solid var(--color-accent);
+  outline-offset: -2px;
+  background-color: color-mix(in srgb, var(--color-accent) 6%, transparent);
   pointer-events: none;
 }
 

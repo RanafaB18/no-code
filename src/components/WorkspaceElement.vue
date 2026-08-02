@@ -2,9 +2,13 @@
 import { computed } from 'vue'
 
 import { toStyleBinding } from '@/composables/styleSchema'
-import type { WorkspaceElement } from '@/composables/useWorkspaceElements'
+// Aliased: the file, this interface and the recursive tag below would
+// otherwise all be `WorkspaceElement`. A type-only import leaves no
+// runtime binding so the tag should still resolve to the component's
+// implicit self-reference, but that is a fragile thing to depend on.
+import type { WorkspaceElement as WorkspaceElementModel } from '@/composables/useWorkspaceElements'
 
-const props = defineProps<{ element: WorkspaceElement }>()
+const props = defineProps<{ element: WorkspaceElementModel }>()
 
 /**
  * A component per element so the style binding is scoped to it.
@@ -25,7 +29,16 @@ const styleBinding = computed(() => toStyleBinding(props.element.styles))
     per render, unlike a template ref callback, which Vue re-invokes
     (unsetting then resetting) whenever the parent re-renders.
   -->
-  <div class="workspace-element" :data-element-id="element.id" :style="styleBinding" />
+  <div class="workspace-element" :data-element-id="element.id" :style="styleBinding">
+    <!--
+      Recurses so a frame's children are laid out by its own display
+      rules. No inline handler here on purpose: an arrow in a v-for is a
+      fresh function every render, which defeats Vue's props-identity
+      check and would re-render the whole subtree. Selection is delegated
+      at the workspace root instead.
+    -->
+    <WorkspaceElement v-for="child in element.children" :key="child.id" :element="child" />
+  </div>
 </template>
 
 <style scoped>

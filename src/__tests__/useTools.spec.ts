@@ -1,11 +1,16 @@
 import { beforeEach, describe, expect, it } from 'vitest'
 
 import { TOOLS, useTools } from '../composables/useTools'
+import { frameDisplay } from '../composables/useFrameTool'
+import { ELEMENT_TYPES } from '../composables/useWorkspaceElements'
 import { toStyleBinding, STYLE_PROPERTIES } from '../composables/styleSchema'
 
 const { activeToolId, activeTool, arm, disarm, toggle } = useTools()
 
-beforeEach(() => disarm())
+beforeEach(() => {
+  disarm()
+  frameDisplay.value = 'block'
+})
 
 describe('useTools', () => {
   it('starts idle, which is select mode', () => {
@@ -14,20 +19,34 @@ describe('useTools', () => {
   })
 
   it('arms and disarms a tool', () => {
-    arm('div')
-    expect(activeToolId.value).toBe('div')
-    expect(activeTool.value?.label).toBe('Div')
+    arm('frame')
+    expect(activeToolId.value).toBe('frame')
+    expect(activeTool.value?.label).toBe('Frame')
 
     disarm()
     expect(activeToolId.value).toBeNull()
   })
 
   it('toggles the same tool back off', () => {
-    toggle('div')
-    expect(activeToolId.value).toBe('div')
+    toggle('frame')
+    expect(activeToolId.value).toBe('frame')
 
-    toggle('div')
+    toggle('frame')
     expect(activeToolId.value).toBeNull()
+  })
+
+  it('only creates element types the workspace knows about', () => {
+    for (const tool of TOOLS) {
+      expect(ELEMENT_TYPES).toContain(tool.creates)
+    }
+  })
+
+  it('seeds the display the frame tool currently has selected', () => {
+    frameDisplay.value = 'grid'
+    expect(TOOLS[0]?.seedStyles()).toEqual({ display: 'grid' })
+
+    frameDisplay.value = 'block'
+    expect(TOOLS[0]?.seedStyles()).toEqual({ display: 'block' })
   })
 
   it('gives every tool a unique id and shortcut', () => {

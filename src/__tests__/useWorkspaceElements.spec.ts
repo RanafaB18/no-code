@@ -1,6 +1,10 @@
 import { beforeEach, describe, expect, it } from 'vitest'
 
-import { useWorkspaceElements } from '../composables/useWorkspaceElements'
+import {
+  findElement,
+  useWorkspaceElements,
+  walkElements,
+} from '../composables/useWorkspaceElements'
 
 const { elements, selectedId, selectedElement, addElement, select, updateStyle } =
   useWorkspaceElements()
@@ -57,5 +61,50 @@ describe('useWorkspaceElements', () => {
 
   it('ignores updates for an unknown id rather than throwing', () => {
     expect(() => updateStyle('does-not-exist', 'padding', '1rem')).not.toThrow()
+  })
+
+  it('gives every element an empty children array', () => {
+    expect(addElement('div').children).toEqual([])
+  })
+
+  it('nests into a parent rather than growing the root', () => {
+    const parent = addElement('div')
+    const child = addElement('div', {}, parent.id)
+
+    expect(elements.value).toHaveLength(1)
+    expect(parent.children).toEqual([child])
+  })
+
+  it('finds and edits elements at any depth', () => {
+    const root = addElement('div')
+    const middle = addElement('div', {}, root.id)
+    const leaf = addElement('div', { width: '10px' }, middle.id)
+
+    // Compared by id, not identity: `addElement` hands back the raw
+    // object while reads through the reactive array yield a proxy of it.
+    // Same underlying element, different reference.
+    expect(findElement(leaf.id)?.id).toBe(leaf.id)
+
+    select(leaf.id)
+    expect(selectedElement.value?.id).toBe(leaf.id)
+
+    updateStyle(leaf.id, 'padding', '1rem')
+    expect(leaf.styles.padding).toBe('1rem')
+    expect(middle.styles.padding).toBeUndefined()
+    expect(root.styles.padding).toBeUndefined()
+  })
+
+  it('falls back to the root for an unknown parent rather than throwing', () => {
+    const orphan = addElement('div', {}, 'does-not-exist')
+
+    expect(elements.value.map((element) => element.id)).toContain(orphan.id)
+  })
+
+  it('walks the tree depth-first, parents before children', () => {
+    const first = addElement('div')
+    const nested = addElement('div', {}, first.id)
+    const second = addElement('div')
+
+    expect([...walkElements(elements.value)]).toEqual([first, nested, second])
   })
 })

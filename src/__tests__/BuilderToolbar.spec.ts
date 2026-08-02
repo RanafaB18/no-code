@@ -37,7 +37,7 @@ describe('Toolbar', () => {
     expect(button.attributes('aria-pressed')).toBe('false')
 
     await button.trigger('click')
-    expect(activeToolId.value).toBe('div')
+    expect(activeToolId.value).toBe('frame')
     expect(button.attributes('aria-pressed')).toBe('true')
     expect(button.classes()).toContain('toolbar__button--active')
 

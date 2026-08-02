@@ -38,7 +38,24 @@ export interface StyleProperty {
   placeholder?: string
 }
 
+/**
+ * The `display` values the Frame tool offers and the inspector can set.
+ *
+ * Owned here rather than by the tool so the toolbar dropdown and the
+ * inspector field cannot drift apart — both read this one array.
+ *
+ * `none` is deliberately absent: it would make an element both
+ * unselectable and unmeasurable, breaking the selection overlay. Adding
+ * it would need a guard in the workspace's `measureRect`.
+ */
+export const DISPLAY_VALUES = ['block', 'flex', 'grid', 'inline-block', 'inline'] as const
+
+export type DisplayValue = (typeof DISPLAY_VALUES)[number]
+
 export const STYLE_PROPERTIES: readonly StyleProperty[] = [
+  // First because it is the most structural property, and the one the
+  // Frame tool has just set at creation time.
+  { key: 'display', label: 'Display', input: 'select', options: DISPLAY_VALUES },
   { key: 'width', label: 'Width', input: 'length', placeholder: 'auto' },
   { key: 'minHeight', label: 'Min height', input: 'length', placeholder: '0' },
   { key: 'padding', label: 'Padding', input: 'length', placeholder: '0' },
@@ -53,6 +70,28 @@ export const STYLE_PROPERTIES: readonly StyleProperty[] = [
   },
   { key: 'borderColor', label: 'Border color', input: 'color' },
   { key: 'borderRadius', label: 'Radius', input: 'length', placeholder: '0' },
+
+  // Both govern how a frame and its children resolve size conflicts.
+  //
+  // `overflow` defaults to `visible`, so a child that outgrows its parent
+  // simply spills out and paints over whatever is beneath — this is the
+  // only property that clips, or produces a scrollbar.
+  //
+  // `flexShrink` exists because flex items default to `flex-shrink: 1`:
+  // a child drawn 500px wide inside a 360px flex parent silently shrinks
+  // to fit while the inspector still reads 500px. Setting 0 makes the
+  // drawn width stick. It only does anything inside a flex parent, which
+  // is not enforced — the schema deliberately doesn't model property
+  // interdependencies.
+  {
+    key: 'overflow',
+    label: 'Overflow',
+    input: 'select',
+    options: ['visible', 'auto', 'hidden', 'scroll'],
+  },
+  // 'length' rather than a new 'number' input: it is a free-text numeric
+  // field, and one property doesn't justify another widget type.
+  { key: 'flexShrink', label: 'Flex shrink', input: 'length', placeholder: '1' },
 ]
 
 /**

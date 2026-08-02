@@ -1,10 +1,16 @@
 import { computed, ref } from 'vue'
 
+import { frameDisplay } from './useFrameTool'
 import type { ElementType } from './useWorkspaceElements'
 
 export interface Tool {
-  /** The element type this tool creates. */
-  id: ElementType
+  /**
+   * The tool's own identity — deliberately *not* the element type it
+   * creates. Several tools can emit the same tag with different seed
+   * styles, which is exactly what a Frame set to `flex` versus `block`
+   * is, so the two can no longer be the same field.
+   */
+  id: string
   /** Toolbar button text. */
   label: string
   /**
@@ -13,6 +19,16 @@ export interface Tool {
    * for tools that later earn a mnemonic of their own.
    */
   shortcut: string
+  /** The HTML tag this tool creates. */
+  creates: ElementType
+  /**
+   * Styles stamped onto whatever this tool creates.
+   *
+   * A function rather than a literal so a tool can carry a user-chosen
+   * option — the Frame tool's display — while still being a static
+   * registry entry.
+   */
+  seedStyles: () => Record<string, string>
 }
 
 /**
@@ -21,8 +37,30 @@ export interface Tool {
  * Adding a tool is one entry here: the toolbar renders from this array
  * and the keyboard handler resolves shortcuts against it, so neither
  * needs editing to pick up a new tool.
+ *
+ * `as const satisfies` rather than a `: readonly Tool[]` annotation:
+ * the annotation would widen `id` to `string` and lose `ToolId` as a
+ * real union, taking `arm`/`toggle`'s type safety with it.
  */
-export const TOOLS: readonly Tool[] = [{ id: 'div', label: 'Div', shortcut: '1' }]
+export const TOOLS = [
+  {
+    id: 'frame',
+    label: 'Frame',
+    shortcut: '1',
+    creates: 'div',
+    seedStyles: () => ({ display: frameDisplay.value }),
+  },
+] as const satisfies readonly Tool[]
+
+/**
+ * A tool as it appears in the registry, with `id` still narrowed to its
+ * literal. `Tool` itself widens `id` to `string` for authoring, so
+ * components handed a registry entry should take this instead — it is
+ * what keeps `arm`/`toggle` callable without a cast.
+ */
+export type RegisteredTool = (typeof TOOLS)[number]
+
+export type ToolId = RegisteredTool['id']
 
 /**
  * The id of the armed creation tool, or `null` when none is armed.
@@ -37,13 +75,13 @@ export const TOOLS: readonly Tool[] = [{ id: 'div', label: 'Div', shortcut: '1' 
  * tool is a single global that the toolbar, the workspace and the
  * keyboard handler all have to agree on.
  */
-const activeToolId = ref<ElementType | null>(null)
+const activeToolId = ref<ToolId | null>(null)
 
 /** The armed-tool state, plus the actions that change it. */
 export function useTools() {
   const activeTool = computed(() => TOOLS.find((tool) => tool.id === activeToolId.value) ?? null)
 
-  function arm(id: ElementType) {
+  function arm(id: ToolId) {
     activeToolId.value = id
   }
 
@@ -56,7 +94,7 @@ export function useTools() {
    * entry points can't develop different behaviour: pressing the key
    * twice disarms exactly like clicking the button twice.
    */
-  function toggle(id: ElementType) {
+  function toggle(id: ToolId) {
     activeToolId.value = activeToolId.value === id ? null : id
   }
 
