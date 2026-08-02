@@ -5,11 +5,26 @@ import { useEventListener } from '@vueuse/core'
 import NodeRenderer from '@/components/NodeRenderer.vue'
 import { onResizeFrame } from '@/composables/useViewport'
 import { useToolShortcuts } from '@/composables/useToolShortcuts'
-import { useTools, type Tool } from '@/composables/useTools'
-import { useCanvasNodes } from '@/composables/useCanvasNodes'
+import { useTools } from '@/composables/useTools'
+import {
+  VIEWPORT_ID,
+  getNode,
+  isViewport,
+  useCanvasNodes,
+} from '@/composables/useCanvasNodes'
 
 const { activeTool, disarm } = useTools()
-const { rootIds, selectedId, selectedNode, addNode, selectNode } = useCanvasNodes()
+const { selectedId, selectedNode, addNode, selectNode } = useCanvasNodes()
+
+/**
+ * The layout the receiving frame imposes.
+ *
+ * Drawing branches on it: a frame with no layout places children by the
+ * offsets they carry, so the drawn position is honoured. A flex or grid
+ * frame places them itself, so the position is discarded and only the
+ * size survives.
+ */
+const dropTargetLayout = computed(() => getNode(dropTargetId.value)?.layout ?? 'none')
 
 const workspace = useTemplateRef<HTMLElement>('workspace')
 
@@ -117,6 +132,19 @@ function resolveDropTarget(event: PointerEvent): HTMLElement | null {
   return target.closest<HTMLElement>('[data-node-id]')
 }
 
+/**
+ * The node to select, or null to clear.
+ *
+ * Split from the drop target because the two want different fallbacks now
+ * that the viewport fills the surface: it is a legitimate *parent* to draw
+ * into, but pressing it is pressing empty canvas, so it is deliberately
+ * not pointer-selectable. It is reachable from its own control instead.
+ */
+function resolveSelectionTarget(event: PointerEvent): string | null {
+  const id = resolveDropTarget(event)?.dataset.nodeId ?? null
+  return isViewport(id) ? null : id
+}
+
 // Re-measure whenever the selection changes, or the selected element's
 // own styles change (padding/border/width edits from the inspector move
 // or resize it).
@@ -163,49 +191,65 @@ const dragOrigin = ref<{ x: number; y: number } | null>(null)
 const dragCurrent = ref<{ x: number; y: number } | null>(null)
 
 /**
- * Size of the drag so far, in px.
- *
- * Only the distance travelled matters, never where the drag happened:
- * elements live in normal flow, so the workspace decides *where* a new
- * element goes and the drag decides only *how big* it is. `Math.abs`
- * is what lets the drag run in any of the four directions.
+ * The drawn rectangle in **viewport** coordinates, normalised so a drag in
+ * any of the four directions yields positive width and height.
  */
-const dragSize = computed(() => {
-  if (!dragOrigin.value || !dragCurrent.value) return null
+const dragRect = computed(() => {
+  const origin = dragOrigin.value
+  const current = dragCurrent.value
+  if (!origin || !current) return null
+
   return {
-    width: Math.abs(dragCurrent.value.x - dragOrigin.value.x),
-    height: Math.abs(dragCurrent.value.y - dragOrigin.value.y),
+    left: Math.min(origin.x, current.x),
+    top: Math.min(origin.y, current.y),
+    width: Math.abs(current.x - origin.x),
+    height: Math.abs(current.y - origin.y),
   }
 })
 
 /**
- * Width becomes an explicit width, but height becomes `min-height` so
- * content and padding can still grow the box later. It also stops a new
- * element collapsing to zero height and looking like nothing happened.
+ * The drawn rectangle expressed **relative to the frame receiving it**.
+ *
+ * Absolute offsets resolve against the containing block, which is the
+ * target frame — so the viewport-space pointer coordinates have to be
+ * rebased onto it, or every nested node would be positioned as though it
+ * sat at the page origin.
  */
-function sizeToStyles(size: { width: number; height: number }) {
-  return { width: `${size.width}px`, minHeight: `${size.height}px` }
+function geometryFor(target: HTMLElement | null) {
+  const rect = dragRect.value
+  if (!rect) return null
+
+  const origin = target?.getBoundingClientRect()
+  return {
+    left: Math.round(rect.left - (origin?.left ?? 0)),
+    top: Math.round(rect.top - (origin?.top ?? 0)),
+    width: Math.round(rect.width),
+    height: Math.round(rect.height),
+  }
 }
 
 /**
- * The tool's seed styles plus the drag's size.
+ * The ghost previews the drawn box at its true size.
  *
- * Size second, so the gesture — the more specific intent — wins if a
- * tool ever seeds a width of its own.
- *
- * `inline` is the exception. Width and height do not apply to
- * non-replaced inline boxes, so emitting them would put CSS in the
- * inspector that the browser silently ignores: a value you can read but
- * never observe. Better to emit nothing than to lie. The element is
- * still created and selected; adding padding gives it a box.
+ * It is teleported into the target frame, so it inherits that frame's
+ * positioning context: inside a Free frame it sits at the drawn offset,
+ * inside a flex/grid frame the parent places it exactly as it will place
+ * the real node.
  */
-function creationStyles(tool: Tool, size: { width: number; height: number }) {
-  const seed = tool.seedStyles()
-  if (seed.display === 'inline') return seed
-  return { ...seed, ...sizeToStyles(size) }
-}
+const ghostStyle = computed(() => {
+  const geometry = geometryFor(dropTargetNode.value)
+  if (!geometry) return null
 
-const ghostStyle = computed(() => (dragSize.value ? sizeToStyles(dragSize.value) : null))
+  const size = { width: `${geometry.width}px`, height: `${geometry.height}px` }
+  if (dropTargetLayout.value !== 'none') return size
+
+  return {
+    ...size,
+    position: 'absolute' as const,
+    left: `${geometry.left}px`,
+    top: `${geometry.top}px`,
+  }
+})
 
 function clearDrag() {
   dragOrigin.value = null
@@ -228,7 +272,7 @@ function handlePointerDown(event: PointerEvent) {
     // click-based selector would immediately re-select the frame just
     // drawn into and discard the new element's selection. jsdom never
     // synthesises that click, so no test would have caught it.
-    selectNode(resolveDropTarget(event)?.dataset.nodeId ?? null)
+    selectNode(resolveSelectionTarget(event))
     return
   }
 
@@ -265,10 +309,22 @@ function handlePointerMove(event: PointerEvent) {
 
 function handlePointerUp(event: PointerEvent) {
   const tool = activeTool.value
-  const size = dragSize.value
+  const geometry = geometryFor(dropTargetNode.value)
 
-  if (tool && size && size.width >= MIN_DRAG && size.height >= MIN_DRAG) {
-    const created = addNode(tool.creates, creationStyles(tool, size), dropTargetId.value)
+  if (tool && geometry && geometry.width >= MIN_DRAG && geometry.height >= MIN_DRAG) {
+    // A frame that imposes a layout places its own children, so the drawn
+    // offsets would be inert — only the size survives. Emitting left/top
+    // there would put values in the inspector the browser ignores.
+    const placed =
+      dropTargetLayout.value === 'none'
+        ? geometry
+        : { width: geometry.width, height: geometry.height }
+
+    const created = addNode(
+      tool.creates,
+      { ...placed, styles: tool.seedStyles() },
+      dropTargetId.value,
+    )
     // Hand the new element to the inspector — the tool disarms below, so
     // we land in select mode with the thing just drawn already selected.
     selectNode(created.id)
@@ -309,7 +365,9 @@ useToolShortcuts(() => {
     <!-- No @click here: selection is delegated to the root handler so the
          innermost element wins, and so this stays a single-prop component
          that can skip re-rendering. -->
-    <NodeRenderer v-for="id in rootIds" :key="id" :node-id="id" />
+    <!-- One root: the viewport. Everything else descends from it, so
+         there is no "no parent" case anywhere downstream. -->
+    <NodeRenderer :node-id="VIEWPORT_ID" />
 
     <!--
       The ghost renders as the target's last child — exactly where the

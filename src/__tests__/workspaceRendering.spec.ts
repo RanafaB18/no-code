@@ -60,7 +60,7 @@ function buildTree(roots: number, depth: number) {
   for (let r = 0; r < roots; r += 1) {
     let parentId: string | null = null
     for (let d = 0; d < depth; d += 1) {
-      parentId = addNode('div', { width: `${r * 10 + d}px` }, parentId).id
+      parentId = addNode('div', { width: r * 10 + d }, parentId).id
     }
     if (parentId) leaves.push(parentId)
   }
@@ -89,7 +89,7 @@ beforeEach(() => {
 
 describe('workspace rendering cost', () => {
   it('does not rebuild every element on each frame of a draw-drag', async () => {
-    for (let i = 0; i < EXISTING; i += 1) addNode('div', { width: `${i + 10}px` })
+    for (let i = 0; i < EXISTING; i += 1) addNode('div', { width: i + 10 })
 
     const wrapper = mount(BuilderWorkspace)
     await nextTick()

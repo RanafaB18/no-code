@@ -71,7 +71,7 @@ describe('Inspector', () => {
   })
 
   it('clears a property back to unset', async () => {
-    const element = addNode('div', { padding: '2rem' })
+    const element = addNode('div', { styles: { padding: '2rem' } })
     selectNode(element.id)
     const wrapper = mount(StyleInspector)
     await nextTick()

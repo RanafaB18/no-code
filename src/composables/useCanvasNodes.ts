@@ -5,8 +5,7 @@ import { computed, ref } from 'vue'
  * change this file needs — the union derives from it.
  *
  * This is the *tag*, not the layout: a flex frame and a plain frame are
- * both `div`s differing only in how they arrange children. `type` earns
- * its keep once a tool emits a genuinely different tag.
+ * both `div`s differing only in how they arrange children.
  */
 export const ELEMENT_TYPES = ['div'] as const
 
@@ -14,16 +13,42 @@ export type ElementType = (typeof ELEMENT_TYPES)[number]
 
 export type NodeId = string
 
+/** How a node arranges its **children**. */
+export type NodeLayout = 'none' | 'flex' | 'grid'
+
+/** How a node positions **itself**. `auto` defers to the parent's layout. */
+export type NodePosition = 'auto' | 'absolute'
+
+/**
+ * Geometry, in parent-local px.
+ *
+ * Optional edge pins per axis rather than x/y/w/h, because that is what
+ * makes an absolute layout responsive — and it maps straight to CSS:
+ *
+ *   left + width      pinned left, fixed size
+ *   right + width     sticks to the right edge as the parent widens
+ *   left + right      width DERIVED — the element stretches
+ *
+ * Drawing only ever writes `left + top + width + height`. The pin widget
+ * that expresses the other combinations is a later change, and needs no
+ * remodelling.
+ */
+export interface NodeGeometry {
+  left?: number
+  right?: number
+  width?: number
+  top?: number
+  bottom?: number
+  height?: number
+}
+
 /**
  * One node on the canvas.
  *
  * Stored in a flat map keyed by id — never as nested child objects.
- * Relationships are ids only: `parentId` up, `childrenIds` down. That is
- * what makes lookup and update O(1), and reparenting three field writes
- * (the moved node's `parentId`, the old parent's `childrenIds`, the new
- * parent's) rather than a splice out of one array and a push into another.
+ * Relationships are ids only: `parentId` up, `childrenIds` down.
  */
-export interface CanvasNode {
+export interface CanvasNode extends NodeGeometry {
   id: NodeId
   type: ElementType
 
@@ -31,14 +56,53 @@ export interface CanvasNode {
   /** Ids, never nested objects. Order here is render order. */
   childrenIds: NodeId[]
 
+  layout: NodeLayout
+  position: NodePosition
+
   /**
-   * CSS only. camelCase keys because that is what Vue's `:style` takes;
-   * an empty-string value means "unset" and is filtered out before it is
-   * applied, so this only ever carries what was explicitly set.
+   * CSS only — colours, borders, padding, gap, alignment. **Never
+   * geometry**, which lives in the fields above so hit-testing and
+   * visibility maths never have to parse strings.
    *
-   * Geometry moves out of here into first-class fields in phase 2.
+   * camelCase keys because that is what Vue's `:style` takes; an empty
+   * string means "unset" and is filtered out before being applied.
    */
   styles: Record<string, string>
+}
+
+/** The one node every document has, and the origin of all coordinates. */
+export const VIEWPORT_ID = 'viewport'
+
+/** Fixed canvas size — the "page" being designed, not the window. */
+export const VIEWPORT_WIDTH = 1440
+export const VIEWPORT_HEIGHT = 1024
+
+export function isViewport(id: NodeId | null | undefined): boolean {
+  return id === VIEWPORT_ID
+}
+
+/**
+ * A fresh viewport.
+ *
+ * Built per call rather than shared, so a reset can never hand back an
+ * object a previous document already mutated.
+ *
+ * It is the coordinate origin, so it is never `absolute` — there is
+ * nothing above it to position against — and has no parent to impose a
+ * layout on it.
+ */
+export function createViewport(): CanvasNode {
+  return {
+    id: VIEWPORT_ID,
+    type: 'div',
+    parentId: null,
+    childrenIds: [],
+    width: VIEWPORT_WIDTH,
+    height: VIEWPORT_HEIGHT,
+    layout: 'none',
+    position: 'auto',
+    styles: {},
+  }
 }
 
 /**
@@ -49,16 +113,7 @@ export interface CanvasNode {
  * and reading `nodes.value[id]` depends on *that key alone* — mutating a
  * sibling never invalidates a renderer looking at this one.
  */
-const nodes = ref<Record<NodeId, CanvasNode>>({})
-
-/**
- * Top-level node ids.
- *
- * Preserves today's multiple-roots behaviour. Phase 2 collapses this to a
- * single viewport root; doing it here would be a behaviour change, and
- * this migration is deliberately behaviour-neutral.
- */
-const rootIds = ref<NodeId[]>([])
+const nodes = ref<Record<NodeId, CanvasNode>>({ [VIEWPORT_ID]: createViewport() })
 
 const selectedId = ref<NodeId | null>(null)
 
@@ -68,42 +123,145 @@ export function getNode(id: NodeId | null | undefined): CanvasNode | null {
   return nodes.value[id] ?? null
 }
 
-/** The ids a node's children occupy, or the roots when given nothing. */
-function siblingIdsFor(parentId: NodeId | null): NodeId[] {
-  const parent = getNode(parentId)
-  return parent ? parent.childrenIds : rootIds.value
+/**
+ * Whether a node positions itself, or is placed by its parent's layout.
+ *
+ * The single rule every consumer asks — drawing, dragging, the selection
+ * overlay and export all branch on this rather than re-deriving it. A
+ * node is absolute when explicitly pinned, or when its parent imposes no
+ * layout to place it.
+ *
+ * Never `static`: a static frame is invisible to the containing-block
+ * search, so any absolute child of it would escape and position against
+ * a distant ancestor instead.
+ */
+export function resolvedPosition(node: CanvasNode): 'absolute' | 'relative' {
+  if (isViewport(node.id)) return 'relative'
+  if (node.position === 'absolute') return 'absolute'
+  return getNode(node.parentId)?.layout === 'none' ? 'absolute' : 'relative'
+}
+
+export interface NodeInit extends NodeGeometry {
+  layout?: NodeLayout
+  position?: NodePosition
+  styles?: Record<string, string>
 }
 
 /**
- * Appends a node to a parent's children, or to the roots when no parent is
- * given.
+ * Appends a node to a parent's children, defaulting to the viewport.
  *
- * An unknown `parentId` falls back to a root rather than throwing, keeping
- * the "ignore an id that isn't there" posture `updateStyle` already had.
+ * An unknown `parentId` falls back to the viewport rather than throwing,
+ * keeping the "ignore an id that isn't there" posture `updateStyle` has.
+ * There is no "no parent" case: every node descends from the viewport.
  */
 export function addNode(
   type: ElementType,
-  styles: Record<string, string> = {},
+  init: NodeInit = {},
   parentId: NodeId | null = null,
 ): CanvasNode {
-  const parent = getNode(parentId)
+  const { layout = 'none', position = 'auto', styles = {}, ...geometry } = init
+  const parent = getNode(parentId) ?? getNode(VIEWPORT_ID)!
+
   const node: CanvasNode = {
     id: crypto.randomUUID(),
     type,
-    parentId: parent?.id ?? null,
+    parentId: parent.id,
     childrenIds: [],
+    layout,
+    position,
     styles,
+    ...geometry,
   }
 
   nodes.value[node.id] = node
-  siblingIdsFor(parent?.id ?? null).push(node.id)
+  parent.childrenIds.push(node.id)
   return node
+}
+
+/**
+ * Removes a node and its whole subtree.
+ *
+ * O(subtree), not O(1): descendants must be evicted from the map too, or
+ * they leak as orphans no longer reachable from any parent. The viewport
+ * cannot be removed — it is the document.
+ */
+export function removeNode(id: NodeId): void {
+  const node = getNode(id)
+  if (!node || isViewport(id)) return
+
+  const parent = getNode(node.parentId)
+  if (parent) {
+    const index = parent.childrenIds.indexOf(id)
+    if (index !== -1) parent.childrenIds.splice(index, 1)
+  }
+
+  // Collected before deleting, not during: `walkNodes` reads the map as it
+  // goes, so evicting mid-walk would truncate it and leave the deeper
+  // descendants orphaned in the store.
+  const doomed = Array.from(walkNodes(id), (descendant) => descendant.id)
+  for (const doomedId of doomed) {
+    delete nodes.value[doomedId]
+  }
+
+  if (selectedId.value && !getNode(selectedId.value)) {
+    // Land on the parent rather than nothing, so you are never stranded
+    // next to something you can no longer click.
+    selectedId.value = parent?.id ?? null
+  }
+}
+
+/**
+ * Reparents a node — the three-field write the flat map exists for: the
+ * moved node's `parentId`, the old parent's `childrenIds`, the new
+ * parent's. No subtree is touched.
+ */
+export function moveNode(id: NodeId, newParentId: NodeId, index?: number): void {
+  const node = getNode(id)
+  const newParent = getNode(newParentId)
+  if (!node || !newParent || isViewport(id)) return
+
+  // A node cannot become its own descendant.
+  for (const descendant of walkNodes(id)) {
+    if (descendant.id === newParentId) return
+  }
+
+  const oldParent = getNode(node.parentId)
+  if (oldParent) {
+    const at = oldParent.childrenIds.indexOf(id)
+    if (at !== -1) oldParent.childrenIds.splice(at, 1)
+  }
+
+  node.parentId = newParentId
+  newParent.childrenIds.splice(index ?? newParent.childrenIds.length, 0, id)
 }
 
 /** O(1) — no traversal. */
 export function updateStyle(id: NodeId, key: string, value: string): void {
   const node = getNode(id)
   if (node) node.styles[key] = value
+}
+
+/** O(1). Undefined values clear a pin rather than being written. */
+export function updateGeometry(id: NodeId, patch: NodeGeometry): void {
+  const node = getNode(id)
+  if (!node) return
+
+  for (const [key, value] of Object.entries(patch) as [keyof NodeGeometry, number | undefined][]) {
+    if (value === undefined) delete node[key]
+    else node[key] = value
+  }
+}
+
+/** O(1). */
+export function updateLayout(id: NodeId, layout: NodeLayout): void {
+  const node = getNode(id)
+  if (node) node.layout = layout
+}
+
+/** O(1). The viewport's own positioning is not the user's to change. */
+export function updatePosition(id: NodeId, position: NodePosition): void {
+  const node = getNode(id)
+  if (node && !isViewport(id)) node.position = position
 }
 
 /**
@@ -122,29 +280,21 @@ export function* walkNodes(id: NodeId): Generator<CanvasNode> {
   }
 }
 
-/** Depth-first across every root, in root order. */
-export function* walkRoots(): Generator<CanvasNode> {
-  for (const id of rootIds.value) {
-    yield* walkNodes(id)
-  }
-}
-
-/** Empties the document and clears the selection. */
+/** Replaces the document with an empty viewport. */
 export function resetDocument(): void {
-  nodes.value = {}
-  rootIds.value = []
+  nodes.value = { [VIEWPORT_ID]: createViewport() }
   selectedId.value = null
 }
 
 /**
  * The canvas document and its selection.
  *
- * Module-level for the same reason as `useTheme`'s preference: there is one
- * document, so every caller shares one source of truth rather than each
- * mounting its own copy.
+ * Module-level for the same reason as `useTheme`'s preference: there is
+ * one document, so every caller shares one source of truth.
  */
 export function useCanvasNodes() {
   const selectedNode = computed(() => getNode(selectedId.value))
+  const viewport = computed(() => getNode(VIEWPORT_ID)!)
 
   function selectNode(id: NodeId | null) {
     selectedId.value = id
@@ -152,13 +302,18 @@ export function useCanvasNodes() {
 
   return {
     nodes,
-    rootIds,
+    viewport,
     selectedId,
     selectedNode,
     getNode,
     addNode,
+    removeNode,
+    moveNode,
     selectNode,
     updateStyle,
+    updateGeometry,
+    updateLayout,
+    updatePosition,
     resetDocument,
   }
 }
