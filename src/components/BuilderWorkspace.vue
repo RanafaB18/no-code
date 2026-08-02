@@ -10,11 +10,15 @@ import {
   VIEWPORT_ID,
   getNode,
   isViewport,
+  resolvedPosition,
   useCanvasNodes,
+  type CanvasNode,
+  type NodeGeometry,
+  type NodeId,
 } from '@/composables/useCanvasNodes'
 
 const { activeTool, disarm } = useTools()
-const { selectedId, selectedNode, addNode, selectNode } = useCanvasNodes()
+const { selectedId, selectedNode, addNode, selectNode, moveNode, updateGeometry } = useCanvasNodes()
 
 /**
  * The layout the receiving frame imposes.
@@ -36,36 +40,65 @@ interface Rect {
 }
 
 /**
- * An element's box in pixels relative to `.workspace`.
- *
- * Both rects are viewport-relative, so subtracting them cancels page
- * scroll — and unlike offsetLeft/offsetTop the result holds regardless of
- * which ancestor happens to be the offsetParent. That assumption was only
- * ever true because elements were `position: static` with `.workspace` as
- * the nearest positioned ancestor; nesting and an editable `display`
- * (one day `position`) both undermine it.
- *
- * `clientLeft`/`clientTop` subtract the workspace's own border, since an
- * absolutely positioned overlay is placed from the padding box.
+ * A node's rendered element.
  *
  * Looked up by attribute rather than a ref-callback map: an inline `:ref`
  * arrow is a new function each render, so Vue would tear the entry down
  * and rebuild it on every re-render. This costs one query, only when
  * something actually needs measuring.
  */
-function measureRect(id: string | null): Rect | null {
-  const root = workspace.value
-  const node = id ? root?.querySelector<HTMLElement>(`[data-node-id="${id}"]`) : null
-  if (!root || !node) return null
+function elementFor(id: NodeId | null | undefined): HTMLElement | null {
+  if (!id) return null
+  return workspace.value?.querySelector<HTMLElement>(`[data-node-id="${id}"]`) ?? null
+}
 
-  const box = node.getBoundingClientRect()
-  const origin = root.getBoundingClientRect()
+/**
+ * Rebases a viewport-relative box onto `container`'s **padding box** —
+ * the coordinate space both absolute offsets and workspace overlays live
+ * in.
+ *
+ * Both rects are viewport-relative, so subtracting them cancels page
+ * scroll — and unlike offsetLeft/offsetTop the result holds regardless of
+ * which ancestor happens to be the offsetParent. That assumption was only
+ * ever true because elements were `position: static` with `.workspace` as
+ * the nearest positioned ancestor; nesting and an editable position both
+ * undermine it.
+ *
+ * `clientLeft`/`clientTop` are the container's own border widths, which
+ * sit between its border box and the padding box the offsets resolve
+ * from. Skip them and every child of a bordered frame lands short by the
+ * border's width.
+ *
+ * A null container means "already in the right space" — the caller had
+ * nothing to rebase onto.
+ */
+function toLocal(box: Rect, container: HTMLElement | null): Rect {
+  if (!container) return { ...box }
+
+  const origin = container.getBoundingClientRect()
   return {
-    left: box.left - origin.left - root.clientLeft,
-    top: box.top - origin.top - root.clientTop,
+    left: box.left - origin.left - container.clientLeft,
+    top: box.top - origin.top - container.clientTop,
     width: box.width,
     height: box.height,
   }
+}
+
+/** An element's box in pixels relative to `.workspace`. */
+function measureRect(id: NodeId | null): Rect | null {
+  const element = elementFor(id)
+  if (!element || !workspace.value) return null
+  return toLocal(element.getBoundingClientRect(), workspace.value)
+}
+
+/**
+ * A node's box in **parent-local** pixels — the same space its pins live
+ * in, so a measurement can stand in for a pin the node doesn't carry.
+ */
+function measureLocalRect(id: NodeId): Rect | null {
+  const element = elementFor(id)
+  if (!element) return null
+  return toLocal(element.getBoundingClientRect(), elementFor(getNode(id)?.parentId))
 }
 
 /** Turns a measured rect into overlay positioning, grown by `gap` a side. */
@@ -96,9 +129,10 @@ function measureSelection() {
 /**
  * Gap, in px, between the element's true edge and the drawn frame.
  *
- * `selectionRect` stays an honest measurement of the element itself —
- * future resize handles would need the real bounds, not an inflated
- * one — so the gap is applied only where the frame is rendered.
+ * `selectionRect` stays an honest measurement of the element itself — the
+ * resize handles work from pointer deltas against the node's own stored
+ * box, not against the frame — so the gap is applied only where the frame
+ * is rendered.
  */
 const SELECTION_GAP = 4
 
@@ -145,15 +179,17 @@ function resolveSelectionTarget(event: PointerEvent): string | null {
   return isViewport(id) ? null : id
 }
 
-// Re-measure whenever the selection changes, or the selected element's
-// own styles change (padding/border/width edits from the inspector move
-// or resize it).
+// Re-measure whenever the selection changes, or anything about the
+// selected node does. Deliberately the whole node rather than its
+// `styles` alone: geometry, layout and position are first-class fields
+// now, and a drag that writes `left` would otherwise leave the frame
+// sitting where the element used to be.
 //
 // flush: 'post' rather than a nested nextTick(): a default 'pre' watcher
 // runs *before* the component re-renders, so a newly selected element
 // wouldn't be in the DOM yet. 'post' runs after that render, so the node
 // is queryable by the time this fires.
-watch([selectedId, () => selectedNode.value?.styles], measureSelection, {
+watch([selectedId, selectedNode], measureSelection, {
   deep: true,
   flush: 'post',
 })
@@ -163,22 +199,66 @@ watch([selectedId, () => selectedNode.value?.styles], measureSelection, {
 // resize fires continuously while a window edge is dragged.
 useEventListener(window, 'resize', onResizeFrame(measureSelection))
 
+/** The sides of a box a gesture can drag. */
+type Edge = 'top' | 'right' | 'bottom' | 'left'
+
+interface SelectionHandle {
+  name: string
+  /** Position along the frame, as CSS percentages. */
+  x: string
+  y: string
+  corner: boolean
+  cursor: string
+  /** Which edges this grip moves — the whole of what resize needs to know. */
+  edges: readonly Edge[]
+}
+
 /**
- * The eight resize grips, as positions along the frame.
+ * The eight resize grips.
  *
  * Coordinates travel as CSS custom properties so a single rule places
- * them all, rather than one rule per named position.
+ * them all, rather than one rule per named position. The edges are listed
+ * explicitly rather than parsed back out of `name`, so the resize maths
+ * never depends on how a handle happens to be spelled.
  */
 const SELECTION_HANDLES = [
-  { name: 'top-left', x: '0%', y: '0%', corner: true },
-  { name: 'top', x: '50%', y: '0%', corner: false },
-  { name: 'top-right', x: '100%', y: '0%', corner: true },
-  { name: 'right', x: '100%', y: '50%', corner: false },
-  { name: 'bottom-right', x: '100%', y: '100%', corner: true },
-  { name: 'bottom', x: '50%', y: '100%', corner: false },
-  { name: 'bottom-left', x: '0%', y: '100%', corner: true },
-  { name: 'left', x: '0%', y: '50%', corner: false },
-] as const
+  {
+    name: 'top-left',
+    x: '0%',
+    y: '0%',
+    corner: true,
+    cursor: 'nwse-resize',
+    edges: ['top', 'left'],
+  },
+  { name: 'top', x: '50%', y: '0%', corner: false, cursor: 'ns-resize', edges: ['top'] },
+  {
+    name: 'top-right',
+    x: '100%',
+    y: '0%',
+    corner: true,
+    cursor: 'nesw-resize',
+    edges: ['top', 'right'],
+  },
+  { name: 'right', x: '100%', y: '50%', corner: false, cursor: 'ew-resize', edges: ['right'] },
+  {
+    name: 'bottom-right',
+    x: '100%',
+    y: '100%',
+    corner: true,
+    cursor: 'nwse-resize',
+    edges: ['bottom', 'right'],
+  },
+  { name: 'bottom', x: '50%', y: '100%', corner: false, cursor: 'ns-resize', edges: ['bottom'] },
+  {
+    name: 'bottom-left',
+    x: '0%',
+    y: '100%',
+    corner: true,
+    cursor: 'nesw-resize',
+    edges: ['bottom', 'left'],
+  },
+  { name: 'left', x: '0%', y: '50%', corner: false, cursor: 'ew-resize', edges: ['left'] },
+] as const satisfies readonly SelectionHandle[]
 
 /**
  * Below this, a drag is treated as a stray click rather than an intent
@@ -219,12 +299,12 @@ function geometryFor(target: HTMLElement | null) {
   const rect = dragRect.value
   if (!rect) return null
 
-  const origin = target?.getBoundingClientRect()
+  const local = toLocal(rect, target)
   return {
-    left: Math.round(rect.left - (origin?.left ?? 0)),
-    top: Math.round(rect.top - (origin?.top ?? 0)),
-    width: Math.round(rect.width),
-    height: Math.round(rect.height),
+    left: Math.round(local.left),
+    top: Math.round(local.top),
+    width: Math.round(local.width),
+    height: Math.round(local.height),
   }
 }
 
@@ -259,6 +339,223 @@ function clearDrag() {
   dropRect.value = null
 }
 
+/**
+ * A move or resize in progress.
+ *
+ * `edges` is what separates the two: empty means the whole box is being
+ * dragged, otherwise those sides are.
+ *
+ * Deliberately a plain `let` rather than a ref — nothing in the template
+ * reads it, and making it reactive would schedule a re-render on every
+ * pointermove of every drag for no visible gain.
+ */
+interface Transform {
+  nodeId: NodeId
+  edges: readonly Edge[]
+  /** Cached from `resolvedPosition` at the start: a gesture cannot change it. */
+  absolute: boolean
+  origin: { x: number; y: number }
+  /** The node's box when the gesture began, measured where it carries no pin. */
+  start: Rect
+  /**
+   * The pins exactly as they were, so Escape can put them back. An
+   * `undefined` here means "was unset", which `updateGeometry` restores
+   * by clearing rather than by writing a zero.
+   */
+  restore: NodeGeometry
+  /** Stays false until the pointer clears MIN_DRAG, so a click is not a drag. */
+  moved: boolean
+}
+
+let transform: Transform | null = null
+
+/**
+ * Below this a resize would be smaller than it is selectable, and a
+ * negative one would flip the box inside out.
+ */
+const MIN_SIZE = 1
+
+/**
+ * Takes ownership of the gesture on the workspace root, not on whatever
+ * was pressed: a handle unmounts the moment the selection re-measures,
+ * and a node re-renders as it is dragged, either of which would drop the
+ * capture mid-gesture. Keeps the drag alive if the pointer leaves the
+ * window. jsdom doesn't implement pointer capture, hence the guard.
+ */
+function capturePointer(pointerId: number) {
+  try {
+    workspace.value?.setPointerCapture(pointerId)
+  } catch {
+    // Unsupported here; the drag still works, it just won't follow the
+    // pointer outside the element.
+  }
+}
+
+function releasePointer(pointerId: number) {
+  try {
+    workspace.value?.releasePointerCapture(pointerId)
+  } catch {
+    // See capturePointer.
+  }
+}
+
+/**
+ * Starts a move (no edges) or a resize (the handle's edges).
+ *
+ * The starting box falls back to a measurement per field, because a node
+ * placed by a flex parent carries no `left`/`top` at all and one drawn
+ * without a size carries no `width`/`height` — but both still have a real
+ * rendered box to drag from.
+ */
+function beginTransform(event: PointerEvent, nodeId: NodeId, edges: readonly Edge[]) {
+  const node = getNode(nodeId)
+  // The viewport is the document, not a box within it: it has nothing to
+  // position against and no parent to reorder it among.
+  if (!node || isViewport(nodeId)) return
+
+  const measured = measureLocalRect(nodeId)
+  transform = {
+    nodeId,
+    edges,
+    absolute: resolvedPosition(node) === 'absolute',
+    origin: { x: event.clientX, y: event.clientY },
+    start: {
+      left: node.left ?? measured?.left ?? 0,
+      top: node.top ?? measured?.top ?? 0,
+      width: node.width ?? measured?.width ?? 0,
+      height: node.height ?? measured?.height ?? 0,
+    },
+    restore: { left: node.left, top: node.top, width: node.width, height: node.height },
+    moved: false,
+  }
+
+  capturePointer(event.pointerId)
+}
+
+/**
+ * The geometry a resize drag produces.
+ *
+ * Dragging a top or left edge moves the origin as well as the size, and
+ * by however much the size *actually* changed — so a width that hits
+ * MIN_SIZE pins that edge in place instead of letting the box run on past
+ * the pointer. The origin is only written when the node positions itself;
+ * under a flex or grid parent those offsets would be inert.
+ */
+function resizeGeometry(active: Transform, dx: number, dy: number): NodeGeometry {
+  const { left, top, width, height } = active.start
+  const patch: NodeGeometry = {}
+
+  if (active.edges.includes('right')) patch.width = Math.max(MIN_SIZE, width + dx)
+  if (active.edges.includes('left')) {
+    const next = Math.max(MIN_SIZE, width - dx)
+    patch.width = next
+    if (active.absolute) patch.left = left + (width - next)
+  }
+
+  if (active.edges.includes('bottom')) patch.height = Math.max(MIN_SIZE, height + dy)
+  if (active.edges.includes('top')) {
+    const next = Math.max(MIN_SIZE, height - dy)
+    patch.height = next
+    if (active.absolute) patch.top = top + (height - next)
+  }
+
+  return patch
+}
+
+/**
+ * Where a dragged node should land among its siblings.
+ *
+ * Reading order rather than a single axis, so one rule serves a row, a
+ * column and a grid alike: a sibling comes before the drop when the
+ * pointer is past its bottom edge entirely, or level with it and past its
+ * midpoint.
+ *
+ * Sibling boxes are read here rather than cached at gesture start because
+ * an in-flow move changes nothing until release — nothing has shifted
+ * under us in between.
+ */
+function insertionIndex(node: CanvasNode, point: { x: number; y: number }): number {
+  const parent = getNode(node.parentId)
+  if (!parent) return 0
+
+  let index = 0
+  for (const siblingId of parent.childrenIds) {
+    if (siblingId === node.id) continue
+
+    const element = elementFor(siblingId)
+    if (!element) continue
+
+    const box = element.getBoundingClientRect()
+    const level = point.y >= box.top && point.y <= box.bottom
+    if (point.y > box.bottom || (level && point.x > box.left + box.width / 2)) index += 1
+  }
+
+  return index
+}
+
+function applyTransform(event: PointerEvent) {
+  const active = transform
+  if (!active) return
+
+  const dx = event.clientX - active.origin.x
+  const dy = event.clientY - active.origin.y
+
+  // Same threshold as drawing: without it, the press that selects an
+  // element would nudge it by whatever jitter the pointer had.
+  if (!active.moved && Math.abs(dx) < MIN_DRAG && Math.abs(dy) < MIN_DRAG) return
+  active.moved = true
+
+  if (active.edges.length > 0) {
+    updateGeometry(active.nodeId, resizeGeometry(active, dx, dy))
+    return
+  }
+
+  // A move only writes offsets for a node that positions itself. An
+  // in-flow node is placed by its parent, so dragging it means reordering
+  // it among its siblings — which is settled on release, from where the
+  // pointer finally landed.
+  if (active.absolute) {
+    updateGeometry(active.nodeId, { left: active.start.left + dx, top: active.start.top + dy })
+  }
+}
+
+function finishTransform(event: PointerEvent) {
+  const active = transform
+  transform = null
+  if (!active?.moved || active.edges.length > 0 || active.absolute) return
+
+  const node = getNode(active.nodeId)
+  if (!node?.parentId) return
+
+  const index = insertionIndex(node, { x: event.clientX, y: event.clientY })
+  // Its own index doubles as the no-op case: reinserting a node at the
+  // position it already occupies would churn two arrays for nothing.
+  const current = getNode(node.parentId)?.childrenIds.indexOf(node.id) ?? -1
+  if (index !== current) moveNode(node.id, node.parentId, index)
+}
+
+/** Abandons a gesture, putting back the pins it had already overwritten. */
+function cancelTransform() {
+  const active = transform
+  transform = null
+  if (active?.moved && (active.edges.length > 0 || active.absolute)) {
+    updateGeometry(active.nodeId, active.restore)
+  }
+}
+
+function handleHandleDown(event: PointerEvent, handle: SelectionHandle) {
+  const id = selectedId.value
+  if (!id) return
+
+  // Stops the workspace's own handler treating this as a press on empty
+  // canvas — the handles are overlay siblings, not inside any node, so it
+  // would otherwise clear the very selection being resized.
+  event.stopPropagation()
+  event.preventDefault()
+
+  beginTransform(event, id, handle.edges)
+}
+
 function handlePointerDown(event: PointerEvent) {
   if (!activeTool.value) {
     // Idle mode: selection is delegated here rather than bound per
@@ -272,7 +569,18 @@ function handlePointerDown(event: PointerEvent) {
     // click-based selector would immediately re-select the frame just
     // drawn into and discard the new element's selection. jsdom never
     // synthesises that click, so no test would have caught it.
-    selectNode(resolveSelectionTarget(event))
+    const id = resolveSelectionTarget(event)
+    selectNode(id)
+
+    // Selecting and moving are one gesture: press picks the element up,
+    // and it only actually moves once the pointer clears MIN_DRAG, so a
+    // plain click still just selects.
+    if (id) {
+      // Suppresses the native text selection that would otherwise drag
+      // out behind the element.
+      event.preventDefault()
+      beginTransform(event, id, [])
+    }
     return
   }
 
@@ -288,26 +596,26 @@ function handlePointerDown(event: PointerEvent) {
   dropTargetId.value = target?.dataset.nodeId ?? null
   dropRect.value = measureRect(dropTargetId.value)
 
-  // Captured on the workspace root, not `event.target`: the target may be
-  // a child element that re-renders mid-drag, and the root is the stable
-  // owner of the gesture. Keeps the drag alive if the pointer leaves the
-  // window. jsdom doesn't implement pointer capture, hence the guard.
-  if (event.currentTarget instanceof Element) {
-    try {
-      event.currentTarget.setPointerCapture(event.pointerId)
-    } catch {
-      // Unsupported here; the drag still works, it just won't follow the
-      // pointer outside the element.
-    }
-  }
+  capturePointer(event.pointerId)
 }
 
 function handlePointerMove(event: PointerEvent) {
+  if (transform) {
+    applyTransform(event)
+    return
+  }
+
   if (!dragOrigin.value) return
   dragCurrent.value = { x: event.clientX, y: event.clientY }
 }
 
 function handlePointerUp(event: PointerEvent) {
+  if (transform) {
+    finishTransform(event)
+    releasePointer(event.pointerId)
+    return
+  }
+
   const tool = activeTool.value
   const geometry = geometryFor(dropTargetNode.value)
 
@@ -320,11 +628,7 @@ function handlePointerUp(event: PointerEvent) {
         ? geometry
         : { width: geometry.width, height: geometry.height }
 
-    const created = addNode(
-      tool.creates,
-      { ...tool.seedInit(), ...placed },
-      dropTargetId.value,
-    )
+    const created = addNode(tool.creates, { ...tool.seedInit(), ...placed }, dropTargetId.value)
     // Hand the new element to the inspector — the tool disarms below, so
     // we land in select mode with the thing just drawn already selected.
     selectNode(created.id)
@@ -333,20 +637,19 @@ function handlePointerUp(event: PointerEvent) {
     disarm()
   }
 
-  if (event.currentTarget instanceof Element) {
-    try {
-      event.currentTarget.releasePointerCapture(event.pointerId)
-    } catch {
-      // See handlePointerDown.
-    }
-  }
+  releasePointer(event.pointerId)
+  clearDrag()
+}
 
+/** Abandons every gesture at once — Escape means "none of this". */
+function cancelGestures() {
+  cancelTransform()
   clearDrag()
 }
 
 useToolShortcuts(() => {
   disarm()
-  clearDrag()
+  cancelGestures()
 })
 </script>
 
@@ -358,7 +661,7 @@ useToolShortcuts(() => {
     @pointerdown="handlePointerDown"
     @pointermove="handlePointerMove"
     @pointerup="handlePointerUp"
-    @pointercancel="clearDrag"
+    @pointercancel="cancelGestures"
     @dragstart.prevent
     @selectstart.prevent
   >
@@ -404,17 +707,19 @@ useToolShortcuts(() => {
 
     <!--
       Selection frame: a sibling overlay, not a child of the selected
-      element — see the comment on selectionRect for why. pointer-events
-      stays off throughout; the handles are not wired to anything yet
-      (no resize this iteration), so they must not look draggable.
+      element — see the comment on selectionRect for why. The frame itself
+      stays transparent to the pointer so it never blocks a click on what
+      it surrounds; only the handles take events back.
     -->
     <div v-if="selectionFrameStyle" class="workspace__selection" :style="selectionFrameStyle">
       <span
         v-for="handle in SELECTION_HANDLES"
         :key="handle.name"
+        :data-handle="handle.name"
         class="workspace__handle"
         :class="handle.corner ? 'workspace__handle--corner' : 'workspace__handle--edge'"
-        :style="{ '--handle-x': handle.x, '--handle-y': handle.y }"
+        :style="{ '--handle-x': handle.x, '--handle-y': handle.y, cursor: handle.cursor }"
+        @pointerdown="handleHandleDown($event, handle)"
       />
     </div>
   </div>
@@ -450,9 +755,8 @@ useToolShortcuts(() => {
 /*
  * Selection frame — a border plus corner/edge handles, positioned over
  * the selected element rather than drawn inside it (see the comment on
- * selectionRect in the script). Non-interactive for now: nothing here
- * responds to pointer events, since there is no resize behaviour yet to
- * back the handles up.
+ * selectionRect in the script). The frame spans the element it surrounds,
+ * so it must not swallow pointer events; the handles opt back in below.
  */
 .workspace__selection {
   position: absolute;
@@ -481,6 +785,16 @@ useToolShortcuts(() => {
   translate: -50% -50%;
   background-color: var(--color-surface-raised);
   border: 1px solid var(--color-accent);
+  /* Back on, against the frame's `none` — these are the one interactive
+     part of the overlay. */
+  pointer-events: auto;
+}
+
+/* While a tool is armed the gesture is drawing, not resizing, so the
+   handles step out of the way entirely rather than intercepting a drag
+   that starts on top of one. */
+.workspace--armed .workspace__handle {
+  pointer-events: none;
 }
 
 .workspace__handle--corner {

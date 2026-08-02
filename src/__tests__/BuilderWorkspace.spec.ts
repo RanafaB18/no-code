@@ -48,6 +48,11 @@ function nodeFor(wrapper: VueWrapper, id: string): Element {
   return wrapper.get(`[data-node-id="${id}"]`).element
 }
 
+/** A resize grip on the selection frame, by the edges it drags. */
+function handleFor(wrapper: VueWrapper, name: string): Element {
+  return wrapper.get(`[data-handle="${name}"]`).element
+}
+
 function pressKey(key: string) {
   window.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true }))
 }
@@ -394,6 +399,161 @@ describe('Workspace', () => {
 
     expect(activeToolId.value).toBeNull()
     input.remove()
+  })
+
+  it('moves an absolutely positioned node by dragging it', async () => {
+    const node = addNode('div', { left: 40, top: 30, width: 100, height: 60 })
+    const wrapper = mount(BuilderWorkspace, { attachTo: document.body })
+    await nextTick()
+
+    await drag(nodeFor(wrapper, node.id), { x: 50, y: 40 }, { x: 90, y: 100 })
+
+    // The parent imposes no layout, so the node places itself and the
+    // drag is a straight offset write.
+    expect(getNode(node.id)).toMatchObject({ left: 80, top: 90, width: 100, height: 60 })
+  })
+
+  it('selects without moving when the press never clears the drag threshold', async () => {
+    const node = addNode('div', { left: 40, top: 30, width: 100, height: 60 })
+    const wrapper = mount(BuilderWorkspace, { attachTo: document.body })
+    await nextTick()
+
+    await drag(nodeFor(wrapper, node.id), { x: 50, y: 40 }, { x: 52, y: 41 })
+
+    expect(selectedId.value).toBe(node.id)
+    expect(getNode(node.id)).toMatchObject({ left: 40, top: 30 })
+  })
+
+  it('reorders an in-flow node among its siblings instead of offsetting it', async () => {
+    const parent = addNode('div', { layout: 'flex', width: 400, height: 300 })
+    const first = addNode('div', { width: 50, height: 50 }, parent.id)
+    const second = addNode('div', { width: 50, height: 50 }, parent.id)
+    const wrapper = mount(BuilderWorkspace, { attachTo: document.body })
+    await nextTick()
+
+    // jsdom has no layout, so every sibling box measures as a zero rect at
+    // the origin — a drop below them all, which puts the node last.
+    await drag(nodeFor(wrapper, first.id), { x: 10, y: 10 }, { x: 10, y: 200 })
+
+    expect(getNode(parent.id)?.childrenIds).toEqual([second.id, first.id])
+    // A flex parent places its children, so no offsets were written.
+    expect(getNode(first.id)?.left).toBeUndefined()
+    expect(getNode(first.id)?.top).toBeUndefined()
+  })
+
+  it('resizes from the bottom-right handle without moving the origin', async () => {
+    const node = addNode('div', { left: 40, top: 30, width: 100, height: 60 })
+    const wrapper = mount(BuilderWorkspace, { attachTo: document.body })
+    selectNode(node.id)
+    await nextTick()
+
+    await drag(handleFor(wrapper, 'bottom-right'), { x: 0, y: 0 }, { x: 25, y: 15 })
+
+    expect(getNode(node.id)).toMatchObject({ left: 40, top: 30, width: 125, height: 75 })
+  })
+
+  it('moves the origin as well as the size when dragging a top-left handle', async () => {
+    const node = addNode('div', { left: 40, top: 30, width: 100, height: 60 })
+    const wrapper = mount(BuilderWorkspace, { attachTo: document.body })
+    selectNode(node.id)
+    await nextTick()
+
+    await drag(handleFor(wrapper, 'top-left'), { x: 0, y: 0 }, { x: 10, y: 20 })
+
+    // Dragging the top-left inwards shrinks the box and pulls the origin
+    // after it, so the opposite corner stays put.
+    expect(getNode(node.id)).toMatchObject({ left: 50, top: 50, width: 90, height: 40 })
+  })
+
+  it('pins the dragged edge rather than inverting the box past the far one', async () => {
+    const node = addNode('div', { left: 40, top: 30, width: 100, height: 60 })
+    const wrapper = mount(BuilderWorkspace, { attachTo: document.body })
+    selectNode(node.id)
+    await nextTick()
+
+    await drag(handleFor(wrapper, 'left'), { x: 0, y: 0 }, { x: 500, y: 0 })
+
+    // The origin follows only as far as the width actually shrank, so the
+    // right edge (140) is where the box collapses to.
+    expect(getNode(node.id)).toMatchObject({ width: 1, left: 139 })
+  })
+
+  it('resizes an in-flow node without writing offsets its parent would ignore', async () => {
+    const parent = addNode('div', { layout: 'flex', width: 400, height: 300 })
+    const child = addNode('div', { width: 50, height: 50 }, parent.id)
+    const wrapper = mount(BuilderWorkspace, { attachTo: document.body })
+    selectNode(child.id)
+    await nextTick()
+
+    await drag(handleFor(wrapper, 'top-left'), { x: 0, y: 0 }, { x: 10, y: 10 })
+
+    expect(getNode(child.id)).toMatchObject({ width: 40, height: 40 })
+    expect(getNode(child.id)?.left).toBeUndefined()
+    expect(getNode(child.id)?.top).toBeUndefined()
+  })
+
+  it('pressing a resize handle keeps the selection it belongs to', async () => {
+    const node = addNode('div', { left: 40, top: 30, width: 100, height: 60 })
+    const wrapper = mount(BuilderWorkspace, { attachTo: document.body })
+    selectNode(node.id)
+    await nextTick()
+
+    // The handles are overlay siblings, not inside any node — without
+    // stopping propagation the workspace would read this as a press on
+    // empty canvas and clear the very selection being resized.
+    firePointer(handleFor(wrapper, 'right'), 'pointerdown', { x: 0, y: 0 })
+    await nextTick()
+
+    expect(selectedId.value).toBe(node.id)
+  })
+
+  it('never resizes the viewport, which is the document rather than a box in it', async () => {
+    const wrapper = mount(BuilderWorkspace, { attachTo: document.body })
+    selectNode(VIEWPORT_ID)
+    await nextTick()
+
+    await drag(handleFor(wrapper, 'bottom-right'), { x: 0, y: 0 }, { x: 200, y: 200 })
+
+    expect(getNode(VIEWPORT_ID)).toMatchObject({ width: 1440, height: 1024 })
+  })
+
+  it('restores the geometry a cancelled resize had already written', async () => {
+    const node = addNode('div', { left: 40, top: 30, width: 100, height: 60 })
+    const wrapper = mount(BuilderWorkspace, { attachTo: document.body })
+    selectNode(node.id)
+    await nextTick()
+
+    const handle = handleFor(wrapper, 'bottom-right')
+    firePointer(handle, 'pointerdown', { x: 0, y: 0 })
+    firePointer(handle, 'pointermove', { x: 60, y: 60 })
+    await nextTick()
+    expect(getNode(node.id)).toMatchObject({ width: 160, height: 120 })
+
+    pressKey('Escape')
+    await nextTick()
+
+    expect(getNode(node.id)).toMatchObject({ left: 40, top: 30, width: 100, height: 60 })
+  })
+
+  it('clears a pin that was unset before a cancelled gesture invented one', async () => {
+    const parent = addNode('div', { layout: 'flex', width: 400, height: 300 })
+    const child = addNode('div', {}, parent.id)
+    const wrapper = mount(BuilderWorkspace, { attachTo: document.body })
+    selectNode(child.id)
+    await nextTick()
+
+    const handle = handleFor(wrapper, 'bottom-right')
+    firePointer(handle, 'pointerdown', { x: 0, y: 0 })
+    firePointer(handle, 'pointermove', { x: 60, y: 60 })
+    await nextTick()
+
+    pressKey('Escape')
+    await nextTick()
+
+    // "Unset" and "zero" are different — restoring must clear the pin, not
+    // write back the measurement the gesture started from.
+    expect(getNode(child.id)?.width).toBeUndefined()
+    expect(getNode(child.id)?.height).toBeUndefined()
   })
 
   it('cancels an in-progress drag on Escape', async () => {
