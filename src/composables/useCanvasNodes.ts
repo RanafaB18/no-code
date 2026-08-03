@@ -93,6 +93,17 @@ export interface CanvasNode extends NodeGeometry {
   heightMode: SizeMode
 
   /**
+   * Width ÷ height, captured at the moment the lock was engaged;
+   * `undefined` is unlocked.
+   *
+   * The captured number rather than a boolean, because the lock's job is
+   * to hold *that* shape — recomputing it from the current size on every
+   * edit would make it hold whatever the last keystroke produced, which is
+   * no constraint at all.
+   */
+  aspectRatio?: number
+
+  /**
    * CSS only — colours, borders, padding, gap, alignment. **Never
    * geometry**, which lives in the fields above so hit-testing and
    * visibility maths never have to parse strings.
@@ -348,6 +359,61 @@ export function stretchesAxis(node: CanvasNode, axis: SizeAxis): boolean {
   return node[start] !== undefined && node[end] !== undefined
 }
 
+/**
+ * True when an aspect lock could hold on this node.
+ *
+ * A ratio is only meaningful between two numbers the node itself states,
+ * in the same unit. A `fill` or `fit` axis is decided by the parent or by
+ * the contents, a `relative` one is a percentage of something else, and a
+ * stretched one is derived from two pins — in each case there is no number
+ * here to scale, and pretending otherwise would give a lock that silently
+ * did nothing.
+ */
+export function canLockAspect(node: CanvasNode): boolean {
+  return (['width', 'height'] as const).every(
+    (axis) =>
+      (axis === 'width' ? node.widthMode : node.heightMode) === 'fixed' &&
+      !stretchesAxis(node, axis) &&
+      node[axis] !== undefined,
+  )
+}
+
+/**
+ * The ratio actually in force, or null.
+ *
+ * Applicability is derived rather than policed: switching an axis to
+ * `fill` suspends the lock instead of discarding it, so switching back
+ * restores the shape the user chose rather than making them set it again.
+ * Nothing shows a lock as engaged while it is suspended — the control is
+ * hidden under exactly the same condition.
+ */
+export function aspectRatioOf(node: CanvasNode): number | null {
+  if (node.aspectRatio === undefined || !canLockAspect(node)) return null
+  return node.aspectRatio
+}
+
+/** O(1). Engaging captures the shape the node currently has. */
+export function setAspectLock(id: NodeId, locked: boolean): void {
+  const node = getNode(id)
+  if (!node) return
+
+  if (!locked) {
+    delete node.aspectRatio
+    return
+  }
+
+  // A zero on either axis has no shape to hold: the ratio would be 0 or
+  // Infinity, and the first edit afterwards would collapse the other axis
+  // or send it out of the document.
+  if (!canLockAspect(node) || !node.width || !node.height) return
+  node.aspectRatio = node.width / node.height
+}
+
+/** The size the other axis has to take for `ratio` to hold. */
+export function counterpartSize(ratio: number, axis: SizeAxis, value: number): number {
+  return Math.round(axis === 'width' ? value / ratio : value * ratio)
+}
+
 /** O(1). */
 export function updateLayout(id: NodeId, layout: NodeLayout): void {
   const node = getNode(id)
@@ -409,6 +475,7 @@ export function useCanvasNodes() {
     updateStyle,
     updateGeometry,
     updateSizeMode,
+    setAspectLock,
     updateLayout,
     updatePosition,
     resetDocument,

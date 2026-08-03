@@ -9,6 +9,7 @@ import { useCanvasShortcuts } from '@/composables/useCanvasShortcuts'
 import { useTools } from '@/composables/useTools'
 import {
   VIEWPORT_ID,
+  aspectRatioOf,
   getNode,
   isViewport,
   resolvedPosition,
@@ -330,6 +331,13 @@ interface Transform {
    * anchors, so the box resizes from the side you are not holding.
    */
   released: readonly Edge[]
+  /**
+   * The locked width-to-height ratio, or null. Read once at the start
+   * like `absolute`: a gesture cannot engage or release the lock, and
+   * re-reading it from the sizes this very drag is writing would have it
+   * hold whatever the last frame produced.
+   */
+  ratio: number | null
   /** Stays false until the pointer clears MIN_DRAG, so a click is not a drag. */
   moved: boolean
 }
@@ -416,6 +424,7 @@ function beginTransform(event: PointerEvent, nodeId: NodeId, edges: readonly Edg
     nodeId,
     edges,
     released,
+    ratio: aspectRatioOf(node),
     absolute: resolvedPosition(node) === 'absolute',
     origin: { x: event.clientX, y: event.clientY },
     start: {
@@ -459,25 +468,46 @@ function beginTransform(event: PointerEvent, nodeId: NodeId, edges: readonly Edg
  */
 function resizeGeometry(active: Transform, dx: number, dy: number): NodeGeometry {
   const { left, top, width, height } = active.start
-  const patch: NodeGeometry = {}
+  const drags = (edge: Edge) => active.edges.includes(edge)
+
+  let nextWidth = width
+  let nextHeight = height
+  if (drags('right')) nextWidth = Math.max(MIN_SIZE, width + dx)
+  if (drags('left')) nextWidth = Math.max(MIN_SIZE, width - dx)
+  if (drags('bottom')) nextHeight = Math.max(MIN_SIZE, height + dy)
+  if (drags('top')) nextHeight = Math.max(MIN_SIZE, height - dy)
+
+  const horizontal = drags('left') || drags('right')
+  const vertical = drags('top') || drags('bottom')
+
+  if (active.ratio !== null) {
+    // A corner drags both axes at once, so the pointer picks which one
+    // leads — whichever it has travelled furthest along. Deriving the same
+    // axis every time would make half of every corner drag do nothing.
+    if (horizontal && (!vertical || Math.abs(dx) >= Math.abs(dy))) {
+      nextHeight = Math.max(MIN_SIZE, Math.round(nextWidth / active.ratio))
+    } else {
+      nextWidth = Math.max(MIN_SIZE, Math.round(nextHeight * active.ratio))
+    }
+  }
 
   // The origin only moves for an edge this gesture still holds. A
   // released one is now derived from the anchor opposite it, so writing
   // the pin back would stretch the box again on the very next frame.
   const holds = (edge: Edge) => active.absolute && !active.released.includes(edge)
 
-  if (active.edges.includes('right')) patch.width = Math.max(MIN_SIZE, width + dx)
-  if (active.edges.includes('left')) {
-    const next = Math.max(MIN_SIZE, width - dx)
-    patch.width = next
-    if (holds('left')) patch.left = left + (width - next)
+  // Under a lock both axes are sized, since one follows the other.
+  // Otherwise only the dragged one is — writing a size onto an axis the
+  // gesture never touched would state a number for a `fill` or `fit` axis
+  // that nothing asked for.
+  const patch: NodeGeometry = {}
+  if (horizontal || active.ratio !== null) {
+    patch.width = nextWidth
+    if (drags('left') && holds('left')) patch.left = left + (width - nextWidth)
   }
-
-  if (active.edges.includes('bottom')) patch.height = Math.max(MIN_SIZE, height + dy)
-  if (active.edges.includes('top')) {
-    const next = Math.max(MIN_SIZE, height - dy)
-    patch.height = next
-    if (holds('top')) patch.top = top + (height - next)
+  if (vertical || active.ratio !== null) {
+    patch.height = nextHeight
+    if (drags('top') && holds('top')) patch.top = top + (height - nextHeight)
   }
 
   return patch

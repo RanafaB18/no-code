@@ -1,4 +1,4 @@
-import { nextTick, onMounted, toValue, watch, type MaybeRefOrGetter } from 'vue'
+import { nextTick, onMounted, onUnmounted, toValue, watch, type MaybeRefOrGetter } from 'vue'
 import { useDraggable } from '@vueuse/core'
 
 import { onResizeFrame, viewportHeight, viewportWidth } from './useViewport'
@@ -37,10 +37,7 @@ export const anchorTopCenter: PanelAnchor = (viewport, panel) => ({
 
 export const anchorRightMiddle: PanelAnchor = (viewport, panel) => ({
   x: viewport.width - panel.width - PANEL_MARGIN,
-  y: Math.max(
-    PANEL_MARGIN,
-    (viewport.height - panel.height) / 2 - viewport.height * GROWTH_BIAS,
-  ),
+  y: Math.max(PANEL_MARGIN, (viewport.height - panel.height) / 2 - viewport.height * GROWTH_BIAS),
 })
 
 /**
@@ -120,10 +117,7 @@ export function useDraggablePanel(
 
   /** Places the panel at its anchor. Runs once, on mount. */
   function applyAnchor() {
-    const start = anchor(
-      { width: viewportWidth.value, height: viewportHeight.value },
-      panelSize(),
-    )
+    const start = anchor({ width: viewportWidth.value, height: viewportHeight.value }, panelSize())
     x.value = start.x
     y.value = start.y
     settle()
@@ -131,6 +125,34 @@ export function useDraggablePanel(
 
   // After a tick, so the panel has been laid out and reports a real size.
   onMounted(() => nextTick(applyAnchor))
+
+  /**
+   * A panel does not keep the height it was anchored at: expanding a
+   * section or revealing a property grows it downward from a position
+   * chosen when it was shorter, until its lower half hangs past the bottom
+   * of the window. Capping the height with `max-height` does not save it —
+   * the overflowing part of the *box* is still off screen, so scrolling
+   * inside the panel can never bring those controls back into reach.
+   *
+   * Re-settling on the panel's own size clamps it back into the window
+   * without re-anchoring it, so it still stays wherever it was dragged.
+   */
+  let observer: ResizeObserver | null = null
+
+  onMounted(() => {
+    // jsdom has no ResizeObserver, and no layout for one to report on.
+    if (typeof ResizeObserver === 'undefined') return
+
+    const element = toValue(panel)
+    if (!element) return
+
+    // Throttled for the same reason as the window listener: this measures
+    // the panel and then writes its position back.
+    observer = new ResizeObserver(onResizeFrame(settle))
+    observer.observe(element)
+  })
+
+  onUnmounted(() => observer?.disconnect())
 
   // Throttled: settle() measures the panel and then writes its position,
   // so running it on every raw resize event thrashes layout.

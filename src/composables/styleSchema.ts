@@ -1,4 +1,5 @@
 import {
+  canLockAspect,
   isViewport,
   resolvedPosition,
   stretchesAxis,
@@ -28,10 +29,30 @@ import {
  *   'length'  free-text CSS length ('12px', '1rem', 'auto')
  *   'color'   native colour picker
  *   'select'  dropdown constrained to the property's `options`
- *   'pins'    the constraint widget — no single value, so it renders its
- *             own control and writes through directly
+ *
+ * The rest are **widgets**: they hold no single value, so they render
+ * their own control and write through directly rather than going through
+ * the shared field row.
+ *
+ *   'pins'    the constraint widget — which edges are anchored
+ *   'aspect'  the width/height ratio lock
+ *   'corners' border radius, uniform or per corner
  */
-export type StyleInputType = 'number' | 'length' | 'color' | 'select' | 'pins'
+export type StyleInputType =
+  'number' | 'length' | 'color' | 'select' | 'pins' | 'aspect' | 'corners'
+
+const WIDGET_INPUTS: readonly StyleInputType[] = ['pins', 'aspect', 'corners']
+
+/**
+ * True for a property with no single field behind it.
+ *
+ * Everything that reads or writes "the value" — the clear button, the
+ * "is it set?" test that decides whether an optional row is shown — has to
+ * stand aside for these and let the widget answer instead.
+ */
+export function isWidget(property: StyleProperty): boolean {
+  return WIDGET_INPUTS.includes(property.input)
+}
 
 /**
  * Where a value lives.
@@ -97,6 +118,33 @@ export interface StyleProperty {
    * ignores is worse than showing nothing.
    */
   appliesTo?: (node: CanvasNode) => boolean
+  /**
+   * Whether a widget property holds a value, which decides whether an
+   * optional row stays visible once it has one. Only widgets need it —
+   * everything else is answered by reading `key`.
+   */
+  hasValue?: (node: CanvasNode) => boolean
+}
+
+/**
+ * The corners of a border radius, in CSS's own order.
+ *
+ * Listed once here rather than in the widget, because the schema also has
+ * to know them: a radius set per corner still counts as the `Radius` row
+ * holding a value, and that row's key is the uniform property.
+ */
+export const UNIFORM_RADIUS_KEY = 'borderRadius'
+
+export const RADIUS_CORNERS = [
+  { key: 'borderTopLeftRadius', label: 'Top left' },
+  { key: 'borderTopRightRadius', label: 'Top right' },
+  { key: 'borderBottomRightRadius', label: 'Bottom right' },
+  { key: 'borderBottomLeftRadius', label: 'Bottom left' },
+] as const
+
+/** Set means non-empty: '' is how the inspector spells "unset". */
+export function isStyleSet(node: CanvasNode, key: string): boolean {
+  return (node.styles[key] ?? '') !== ''
 }
 
 export const LAYOUT_VALUES = ['none', 'flex', 'grid'] as const satisfies readonly NodeLayout[]
@@ -297,6 +345,15 @@ export const STYLE_PROPERTIES: readonly StyleProperty[] = [
     placeholder: unitFor('height'),
     appliesTo: statesSize('height'),
   },
+  // Last in the section, under the two fields it ties together.
+  {
+    key: 'aspectRatio',
+    section: 'size',
+    label: 'Ratio',
+    input: 'aspect',
+    source: 'node',
+    appliesTo: canLockAspect,
+  },
 
   // Appearance.
   {
@@ -342,14 +399,19 @@ export const STYLE_PROPERTIES: readonly StyleProperty[] = [
     input: 'color',
     source: 'style',
   },
+  // One row for five properties: the widget writes either the shorthand or
+  // the four corners, never both, so the row counts as set when any of
+  // them holds a value.
   {
-    key: 'borderRadius',
+    key: UNIFORM_RADIUS_KEY,
     section: 'appearance',
     optional: true,
     label: 'Radius',
-    input: 'length',
+    input: 'corners',
     source: 'style',
-    placeholder: '0',
+    hasValue: (node) =>
+      isStyleSet(node, UNIFORM_RADIUS_KEY) ||
+      RADIUS_CORNERS.some((corner) => isStyleSet(node, corner.key)),
   },
 
   /**

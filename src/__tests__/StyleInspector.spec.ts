@@ -161,6 +161,91 @@ describe('Inspector', () => {
     expect(wrapper.get('[aria-label="Clear Padding"]').attributes('disabled')).toBeDefined()
   })
 
+  describe('aspect lock', () => {
+    it('is offered only for a node that states both sizes in pixels', async () => {
+      const sized = await mountWith(addNode('div', { width: 300, height: 200 }))
+      expect(sized.find('#field-aspectRatio').exists()).toBe(true)
+
+      // A `fit` axis is decided by the contents, so there is no number
+      // here to scale and no shape to hold.
+      const fitted = await mountWith(addNode('div', { width: 300, heightMode: 'fit' }))
+      expect(fitted.find('#field-aspectRatio').exists()).toBe(false)
+    })
+
+    it('carries the other axis when a size is typed', async () => {
+      const node = addNode('div', { width: 300, height: 200 })
+      const wrapper = await mountWith(node)
+
+      await wrapper.get('#field-aspectRatio').trigger('click')
+      await wrapper.get('#field-width').setValue('600')
+
+      expect(node.height).toBe(400)
+
+      // And the other way round, off the same captured ratio.
+      await wrapper.get('#field-height').setValue('100')
+      expect(node.width).toBe(150)
+    })
+
+    it('leaves the other axis alone while unlocked', async () => {
+      const node = addNode('div', { width: 300, height: 200 })
+      const wrapper = await mountWith(node)
+
+      await wrapper.get('#field-width').setValue('600')
+
+      expect(node.height).toBe(200)
+    })
+  })
+
+  describe('corner radius', () => {
+    it('splits one value into four, seeded from what was showing', async () => {
+      const node = addNode('div', { styles: { borderRadius: '12px' } })
+      const wrapper = await mountWith(node)
+
+      await wrapper.get('.radius__mode').trigger('click')
+
+      // The shorthand goes as the longhands arrive: with both in the style
+      // map, which one wins would come down to insertion order.
+      expect(node.styles.borderRadius).toBe('')
+      expect(node.styles.borderTopLeftRadius).toBe('12px')
+      expect(node.styles.borderBottomRightRadius).toBe('12px')
+    })
+
+    it('opens per-corner mode with a value even from nothing', async () => {
+      const node = addNode('div')
+      const wrapper = await mountWith(node, 'borderRadius')
+
+      await wrapper.get('.radius__mode').trigger('click')
+      await nextTick()
+
+      // The mode is derived from the corners, so four blanks would flip
+      // straight back to one field.
+      expect(node.styles.borderTopLeftRadius).toBe('0')
+      expect(wrapper.find('#field-borderTopLeftRadius').exists()).toBe(true)
+    })
+
+    it('merges back to the first corner', async () => {
+      const node = addNode('div', {
+        styles: { borderTopLeftRadius: '4px', borderBottomRightRadius: '20px' },
+      })
+      const wrapper = await mountWith(node)
+
+      await wrapper.get('.radius__mode').trigger('click')
+
+      expect(node.styles.borderRadius).toBe('4px')
+      expect(node.styles.borderBottomRightRadius).toBe('')
+    })
+
+    it('counts a per-corner radius as the row having a value', async () => {
+      const node = addNode('div', { styles: { borderTopLeftRadius: '4px' } })
+      const wrapper = await mountWith(node)
+
+      // Shown without being asked for — otherwise a radius would be in
+      // effect with no control anywhere to undo it.
+      expect(wrapper.find('#field-borderTopLeftRadius').exists()).toBe(true)
+      expect(wrapper.find('.group__add option[value="borderRadius"]').exists()).toBe(false)
+    })
+  })
+
   it('offers no orientation control', () => {
     const wrapper = mount(StyleInspector)
 

@@ -4,9 +4,13 @@ import {
   ELEMENT_TYPES,
   VIEWPORT_ID,
   addNode,
+  aspectRatioOf,
+  canLockAspect,
+  counterpartSize,
   getNode,
   moveNode,
   removeNode,
+  setAspectLock,
   updateSizeMode,
   resetDocument,
   resolvedPosition,
@@ -244,6 +248,66 @@ describe('useCanvasNodes', () => {
       updateSizeMode(node.id, 'width', 'fit')
 
       expect(getNode(node.id)).toMatchObject({ heightMode: 'fixed', height: 150 })
+    })
+  })
+
+  describe('aspect lock', () => {
+    it('captures the shape the node has when it is engaged', () => {
+      const node = addNode('div', { width: 300, height: 200 })
+
+      setAspectLock(node.id, true)
+
+      expect(aspectRatioOf(node)).toBe(1.5)
+      // The captured number, not a recomputed one: the lock holds the
+      // shape it was given rather than whatever the last edit produced.
+      expect(counterpartSize(aspectRatioOf(node)!, 'width', 600)).toBe(400)
+      expect(counterpartSize(aspectRatioOf(node)!, 'height', 100)).toBe(150)
+    })
+
+    it('refuses a shape it cannot hold', () => {
+      const flat = addNode('div', { width: 300, height: 0 })
+      const unsized = addNode('div')
+
+      setAspectLock(flat.id, true)
+      setAspectLock(unsized.id, true)
+
+      // A zero on either axis would store 0 or Infinity, and the next edit
+      // would collapse the other axis or send it out of the document.
+      expect(aspectRatioOf(flat)).toBeNull()
+      expect(aspectRatioOf(unsized)).toBeNull()
+    })
+
+    it('suspends rather than discards the lock when an axis stops stating a size', () => {
+      const node = addNode('div', { width: 300, height: 200 })
+      setAspectLock(node.id, true)
+
+      updateSizeMode(node.id, 'width', 'fill')
+
+      // Nothing here to scale — the parent decides the width now.
+      expect(canLockAspect(node)).toBe(false)
+      expect(aspectRatioOf(node)).toBeNull()
+
+      updateSizeMode(node.id, 'width', 'fixed')
+      updateGeometry(node.id, { width: 300 })
+
+      // The shape the user chose comes back rather than making them
+      // choose it again.
+      expect(aspectRatioOf(node)).toBe(1.5)
+    })
+
+    it('cannot hold across an axis the parent derives', () => {
+      const node = addNode('div', { left: 0, right: 0, width: 300, height: 200 })
+
+      expect(canLockAspect(node)).toBe(false)
+    })
+
+    it('releases the lock outright', () => {
+      const node = addNode('div', { width: 300, height: 200 })
+      setAspectLock(node.id, true)
+
+      setAspectLock(node.id, false)
+
+      expect(node.aspectRatio).toBeUndefined()
     })
   })
 

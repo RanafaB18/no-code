@@ -1,10 +1,13 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
 
+import AspectLock from '@/components/AspectLock.vue'
 import ConstraintPins from '@/components/ConstraintPins.vue'
+import CornerRadius from '@/components/CornerRadius.vue'
 import DraggablePanel from '@/components/DraggablePanel.vue'
 import { measureNodeRect } from '@/composables/nodeMeasure'
 import {
+  isWidget,
   resolveDynamic,
   sectionsFor,
   type PropertySection,
@@ -14,6 +17,8 @@ import {
 import { anchorRightMiddle } from '@/composables/useDraggablePanel'
 import {
   DEFAULT_SIZE_MODE,
+  aspectRatioOf,
+  counterpartSize,
   resolvedPosition,
   useCanvasNodes,
   type CanvasNode,
@@ -83,7 +88,23 @@ function setValue(property: StyleProperty, value: string) {
   // move an element to the origin.
   const numeric = value === '' ? undefined : Number(value)
   if (numeric !== undefined && !Number.isFinite(numeric)) return
-  updateGeometry(node.id, { [property.key]: numeric })
+  updateGeometry(node.id, { [property.key]: numeric, ...counterpart(node, property.key, numeric) })
+}
+
+/**
+ * The other axis, when a locked ratio means it has to follow.
+ *
+ * Skipped for a cleared field: an axis with no size has no shape, so
+ * scaling the other one from it would be scaling from nothing.
+ */
+function counterpart(node: CanvasNode, key: string, value: number | undefined): NodeGeometry {
+  if (value === undefined || (key !== 'width' && key !== 'height')) return {}
+
+  const ratio = aspectRatioOf(node)
+  if (ratio === null) return {}
+
+  const axis: SizeAxis = key
+  return { [axis === 'width' ? 'height' : 'width']: counterpartSize(ratio, axis, value) }
 }
 
 /**
@@ -156,8 +177,12 @@ watch(
 
 function isSet(property: StyleProperty) {
   const node = selectedNode.value
-  // The pin widget has no single value, so "set" does not apply to it.
-  return !!node && property.input !== 'pins' && valueOf(node, property) !== ''
+  if (!node) return false
+  // A widget has no single field to read, so it answers for itself — the
+  // radius row is set by any of five properties, and the pin widget by
+  // none, since it is never optional.
+  if (isWidget(property)) return property.hasValue?.(node) ?? false
+  return valueOf(node, property) !== ''
 }
 
 /** Optional and unset stays hidden until it is asked for. */
@@ -253,11 +278,23 @@ function handleInput(property: StyleProperty, event: Event) {
           <div v-for="property in shownIn(section)" :key="property.key" class="field">
             <label class="field__label" :for="`field-${property.key}`">{{ property.label }}</label>
 
-            <!-- The widget writes geometry itself rather than producing a
-               single value, so it stands outside the shared control row
+            <!-- Widgets write through themselves rather than producing a
+               single value, so they stand outside the shared control row
                and its clear button. -->
             <ConstraintPins
               v-if="property.input === 'pins'"
+              :id="`field-${property.key}`"
+              :node="selectedNode"
+            />
+
+            <AspectLock
+              v-else-if="property.input === 'aspect'"
+              :id="`field-${property.key}`"
+              :node="selectedNode"
+            />
+
+            <CornerRadius
+              v-else-if="property.input === 'corners'"
               :id="`field-${property.key}`"
               :node="selectedNode"
             />
