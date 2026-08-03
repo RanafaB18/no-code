@@ -1,9 +1,12 @@
 import {
   isViewport,
   resolvedPosition,
+  usesSizeValue,
   type CanvasNode,
   type NodeLayout,
   type NodePosition,
+  type SizeAxis,
+  type SizeMode,
 } from './useCanvasNodes'
 
 /**
@@ -36,6 +39,20 @@ export type StyleInputType = 'number' | 'length' | 'color' | 'select'
  */
 export type PropertySource = 'node' | 'style'
 
+/**
+ * A value that may depend on the node being edited.
+ *
+ * Some properties cannot be described statically: `fill` is only a real
+ * choice for a node its parent lays out, and a size field's unit depends
+ * on the mode chosen above it. Resolving per node keeps that knowledge in
+ * the schema rather than spreading it through the inspector's template.
+ */
+export type Dynamic<T> = T | ((node: CanvasNode) => T)
+
+export function resolveDynamic<T>(value: Dynamic<T>, node: CanvasNode): T {
+  return typeof value === 'function' ? (value as (node: CanvasNode) => T)(node) : value
+}
+
 export interface StyleProperty {
   /** For `style`, the camelCase CSS property. For `node`, the field name. */
   key: string
@@ -43,8 +60,8 @@ export interface StyleProperty {
   input: StyleInputType
   source: PropertySource
   /** Only meaningful for `input: 'select'`. */
-  options?: readonly string[]
-  placeholder?: string
+  options?: Dynamic<readonly string[]>
+  placeholder?: Dynamic<string>
   /**
    * Hides a property that would be inert in the node's current context —
    * offsets under a parent that positions its own children, or flex
@@ -66,6 +83,32 @@ function isPositioned(node: CanvasNode) {
 /** True when the node arranges its own children, so flex/grid options apply. */
 function laysOutChildren(node: CanvasNode) {
   return node.layout !== 'none'
+}
+
+export const SIZE_MODES = [
+  'fixed',
+  'relative',
+  'fill',
+  'fit',
+] as const satisfies readonly SizeMode[]
+
+/**
+ * The size modes a node can actually use.
+ *
+ * `fill` is dropped for a node that positions itself: it is `flex-grow`
+ * or `stretch` underneath, and neither reaches a box its parent has
+ * stopped laying out. Such a node fills by pinning both edges instead —
+ * the constraint widget, not this control.
+ */
+function sizeModesFor(node: CanvasNode): readonly string[] {
+  if (resolvedPosition(node) === 'relative') return SIZE_MODES
+  return SIZE_MODES.filter((mode) => mode !== 'fill')
+}
+
+/** The unit the number beside a mode is read in. */
+function unitFor(axis: SizeAxis) {
+  return (node: CanvasNode) =>
+    (axis === 'width' ? node.widthMode : node.heightMode) === 'relative' ? '%' : 'px'
 }
 
 export const STYLE_PROPERTIES: readonly StyleProperty[] = [
@@ -114,9 +157,26 @@ export const STYLE_PROPERTIES: readonly StyleProperty[] = [
   { key: 'left', label: 'Left', input: 'number', source: 'node', appliesTo: isPositioned },
   { key: 'top', label: 'Top', input: 'number', source: 'node', appliesTo: isPositioned },
 
-  // Size — geometry, never CSS strings.
-  { key: 'width', label: 'Width', input: 'number', source: 'node' },
-  { key: 'height', label: 'Height', input: 'number', source: 'node' },
+  // Size — a mode per axis, then the number that mode reads. The number
+  // is hidden under `fill` and `fit`, which take no value at all.
+  { key: 'widthMode', label: 'Width', input: 'select', source: 'node', options: sizeModesFor },
+  {
+    key: 'width',
+    label: 'W',
+    input: 'number',
+    source: 'node',
+    placeholder: unitFor('width'),
+    appliesTo: (node) => usesSizeValue(node.widthMode),
+  },
+  { key: 'heightMode', label: 'Height', input: 'select', source: 'node', options: sizeModesFor },
+  {
+    key: 'height',
+    label: 'H',
+    input: 'number',
+    source: 'node',
+    placeholder: unitFor('height'),
+    appliesTo: (node) => usesSizeValue(node.heightMode),
+  },
 
   // Appearance.
   { key: 'padding', label: 'Padding', input: 'length', source: 'style', placeholder: '0' },

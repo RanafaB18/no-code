@@ -8,6 +8,7 @@ import {
   resolvedPosition,
   type CanvasNode,
   type NodeId,
+  type SizeAxis,
 } from '@/composables/useCanvasNodes'
 
 /**
@@ -31,6 +32,46 @@ function px(value: number | undefined) {
 }
 
 /**
+ * One axis's size, as the mode says to read the stored number.
+ *
+ * `fill` emits nothing here on purpose: it is not a length at all but a
+ * claim on the space siblings leave, which `fillFor` expresses instead.
+ */
+function sizeFor(current: CanvasNode, axis: SizeAxis) {
+  const mode = axis === 'width' ? current.widthMode : current.heightMode
+  const value = current[axis]
+
+  if (mode === 'fit') return 'fit-content'
+  if (value === undefined) return undefined
+  // `fit-content` rather than `auto`, which in a flex container's cross
+  // axis means "stretch" — the opposite of shrinking to your contents.
+  return mode === 'relative' ? `${value}%` : px(value)
+}
+
+/**
+ * What makes `fill` fill.
+ *
+ * Only a parent that lays this node out can grant it: along a flex main
+ * axis it is `flex-grow`, and across that axis — or in a grid — it is
+ * `stretch`, which needs the size itself left auto to have any effect.
+ */
+function fillFor(current: CanvasNode, axis: SizeAxis) {
+  const mode = axis === 'width' ? current.widthMode : current.heightMode
+  const parent = getNode(current.parentId)
+  if (mode !== 'fill' || !parent || resolvedPosition(current) !== 'relative') return {}
+
+  if (parent.layout === 'grid') {
+    return axis === 'width' ? { justifySelf: 'stretch' } : { alignSelf: 'stretch' }
+  }
+  if (parent.layout !== 'flex') return {}
+
+  const mainAxis: SizeAxis = parent.styles.flexDirection === 'column' ? 'height' : 'width'
+  // `flex-basis: 0` so siblings that both fill share the space evenly,
+  // rather than each keeping its content width and splitting the remainder.
+  return axis === mainAxis ? { flexGrow: '1', flexBasis: '0' } : { alignSelf: 'stretch' }
+}
+
+/**
  * Geometry only applies when the node positions itself. Under a flex or
  * grid parent the offsets are meaningless — the parent places it — so
  * they are withheld rather than emitted and ignored, which keeps the DOM
@@ -40,7 +81,12 @@ function px(value: number | undefined) {
  */
 function geometryFor(current: CanvasNode) {
   const position = resolvedPosition(current)
-  const size = { width: px(current.width), height: px(current.height) }
+  const size = {
+    width: sizeFor(current, 'width'),
+    height: sizeFor(current, 'height'),
+    ...fillFor(current, 'width'),
+    ...fillFor(current, 'height'),
+  }
 
   if (position !== 'absolute') return size
   return {

@@ -7,6 +7,7 @@ import {
   getNode,
   moveNode,
   removeNode,
+  updateSizeMode,
   resetDocument,
   resolvedPosition,
   updateGeometry,
@@ -201,6 +202,48 @@ describe('useCanvasNodes', () => {
     it('refuses to remove the viewport', () => {
       removeNode(VIEWPORT_ID)
       expect(getNode(VIEWPORT_ID)).not.toBeNull()
+    })
+  })
+
+  describe('updateSizeMode', () => {
+    it('seeds 100 when switching to relative, so the node fills rather than overflows', () => {
+      const node = addNode('div', { width: 200 })
+
+      updateSizeMode(node.id, 'width', 'relative')
+
+      // Carrying 200 across would render 200% — twice the parent, from a
+      // switch the user reads as "make this proportional".
+      expect(getNode(node.id)).toMatchObject({ widthMode: 'relative', width: 100 })
+    })
+
+    it('clears the number for modes that read none', () => {
+      const node = addNode('div', { width: 200, height: 150 })
+
+      updateSizeMode(node.id, 'width', 'fill')
+      updateSizeMode(node.id, 'height', 'fit')
+
+      // Left in place it would spring back the moment the axis returned
+      // to fixed, long after the value stopped meaning anything.
+      expect(getNode(node.id)?.width).toBeUndefined()
+      expect(getNode(node.id)?.height).toBeUndefined()
+    })
+
+    it('keeps the number when switching to fixed', () => {
+      const node = addNode('div', { width: 60, widthMode: 'relative' })
+
+      updateSizeMode(node.id, 'width', 'fixed')
+
+      // 60% becomes 60px: visibly wrong if unwanted, and one keystroke to
+      // correct — unlike a silently cleared size, which collapses the box.
+      expect(getNode(node.id)).toMatchObject({ widthMode: 'fixed', width: 60 })
+    })
+
+    it('treats the two axes independently', () => {
+      const node = addNode('div', { width: 200, height: 150 })
+
+      updateSizeMode(node.id, 'width', 'fit')
+
+      expect(getNode(node.id)).toMatchObject({ heightMode: 'fixed', height: 150 })
     })
   })
 

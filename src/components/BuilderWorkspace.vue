@@ -15,11 +15,20 @@ import {
   type CanvasNode,
   type NodeGeometry,
   type NodeId,
+  type SizeAxis,
 } from '@/composables/useCanvasNodes'
 
 const { activeTool, disarm } = useTools()
-const { selectedId, selectedNode, addNode, removeNode, selectNode, moveNode, updateGeometry } =
-  useCanvasNodes()
+const {
+  selectedId,
+  selectedNode,
+  addNode,
+  removeNode,
+  selectNode,
+  moveNode,
+  updateGeometry,
+  updateSizeMode,
+} = useCanvasNodes()
 
 /**
  * The layout the receiving frame imposes.
@@ -381,6 +390,12 @@ let transform: Transform | null = null
  */
 const MIN_SIZE = 1
 
+/** Which edges govern which axis, for turning a resize into a size mode. */
+const RESIZE_AXES = [
+  ['width', ['left', 'right']],
+  ['height', ['top', 'bottom']],
+] as const satisfies readonly (readonly [SizeAxis, readonly Edge[]])[]
+
 /**
  * Takes ownership of the gesture on the workspace root, not on whatever
  * was pressed: a handle unmounts the moment the selection re-measures,
@@ -512,6 +527,14 @@ function applyTransform(event: PointerEvent) {
   active.moved = true
 
   if (active.edges.length > 0) {
+    // Dragging an edge states a size in pixels, so an axis that was
+    // filling or fitting becomes fixed — at whatever it was measuring
+    // when the gesture began, which `start` already holds.
+    for (const [axis, sides] of RESIZE_AXES) {
+      if (sides.some((side) => active.edges.includes(side))) {
+        updateSizeMode(active.nodeId, axis, 'fixed')
+      }
+    }
     updateGeometry(active.nodeId, resizeGeometry(active, dx, dy))
     return
   }

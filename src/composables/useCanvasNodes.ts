@@ -20,6 +20,31 @@ export type NodeLayout = 'none' | 'flex' | 'grid'
 export type NodePosition = 'auto' | 'absolute'
 
 /**
+ * How an axis gets its size.
+ *
+ * The stored number means something different under each, which is why
+ * the mode is a field rather than a unit suffix on a string:
+ *
+ *   fixed     the number is px
+ *   relative  the number is a percentage of the containing block's
+ *             **padding** box — so a parent's padding changes what 50%
+ *             means, as well as where the child starts
+ *   fill      no number; takes the space its siblings leave
+ *   fit       no number; shrinks to its contents
+ *
+ * `fill` is only expressible for a node its parent actually lays out —
+ * it becomes `flex-grow` along the main axis and `stretch` across it.
+ * An absolutely positioned node fills by pinning both edges instead,
+ * which is the constraint widget's job, not this one's.
+ */
+export type SizeMode = 'fixed' | 'relative' | 'fill' | 'fit'
+
+export const DEFAULT_SIZE_MODE: SizeMode = 'fixed'
+
+/** The two axes a size mode applies to. */
+export type SizeAxis = 'width' | 'height'
+
+/**
  * Geometry, in parent-local px.
  *
  * Optional edge pins per axis rather than x/y/w/h, because that is what
@@ -58,6 +83,14 @@ export interface CanvasNode extends NodeGeometry {
 
   layout: NodeLayout
   position: NodePosition
+
+  /**
+   * How `width` and `height` above are to be read. Separate fields rather
+   * than one, because the two axes are independent: a card is commonly
+   * relative across and fit-content down.
+   */
+  widthMode: SizeMode
+  heightMode: SizeMode
 
   /**
    * CSS only — colours, borders, padding, gap, alignment. **Never
@@ -99,6 +132,8 @@ export function createViewport(): CanvasNode {
     childrenIds: [],
     width: VIEWPORT_WIDTH,
     height: VIEWPORT_HEIGHT,
+    widthMode: DEFAULT_SIZE_MODE,
+    heightMode: DEFAULT_SIZE_MODE,
     layout: 'none',
     position: 'auto',
     styles: {},
@@ -144,6 +179,8 @@ export function resolvedPosition(node: CanvasNode): 'absolute' | 'relative' {
 export interface NodeInit extends NodeGeometry {
   layout?: NodeLayout
   position?: NodePosition
+  widthMode?: SizeMode
+  heightMode?: SizeMode
   styles?: Record<string, string>
 }
 
@@ -159,7 +196,14 @@ export function addNode(
   init: NodeInit = {},
   parentId: NodeId | null = null,
 ): CanvasNode {
-  const { layout = 'none', position = 'auto', styles = {}, ...geometry } = init
+  const {
+    layout = 'none',
+    position = 'auto',
+    widthMode = DEFAULT_SIZE_MODE,
+    heightMode = DEFAULT_SIZE_MODE,
+    styles = {},
+    ...geometry
+  } = init
   const parent = getNode(parentId) ?? getNode(VIEWPORT_ID)!
 
   const node: CanvasNode = {
@@ -169,6 +213,8 @@ export function addNode(
     childrenIds: [],
     layout,
     position,
+    widthMode,
+    heightMode,
     styles,
     ...geometry,
   }
@@ -255,6 +301,31 @@ export function updateGeometry(id: NodeId, patch: NodeGeometry): void {
   }
 }
 
+/**
+ * O(1). Switching modes carries the stored number across only where it
+ * still means something:
+ *
+ *   -> relative  seeded to 100, so the node fills its parent rather than
+ *                reappearing at 200% of it because 200px was in the field
+ *   -> fill/fit  cleared, since neither reads a number and a stale one
+ *                would spring back the moment you returned to fixed
+ *   -> fixed     kept, so a percentage becomes that many px — visibly
+ *                wrong if unwanted, and one keystroke to correct
+ */
+export function updateSizeMode(id: NodeId, axis: SizeAxis, mode: SizeMode): void {
+  const node = getNode(id)
+  if (!node) return
+
+  node[axis === 'width' ? 'widthMode' : 'heightMode'] = mode
+  if (mode === 'relative') node[axis] = 100
+  else if (mode === 'fill' || mode === 'fit') delete node[axis]
+}
+
+/** True when the axis reads its stored number at all. */
+export function usesSizeValue(mode: SizeMode): boolean {
+  return mode === 'fixed' || mode === 'relative'
+}
+
 /** O(1). */
 export function updateLayout(id: NodeId, layout: NodeLayout): void {
   const node = getNode(id)
@@ -315,6 +386,7 @@ export function useCanvasNodes() {
     selectNode,
     updateStyle,
     updateGeometry,
+    updateSizeMode,
     updateLayout,
     updatePosition,
     resetDocument,

@@ -1,15 +1,18 @@
 <script setup lang="ts">
 import DraggablePanel from '@/components/DraggablePanel.vue'
-import { propertiesFor, type StyleProperty } from '@/composables/styleSchema'
+import { propertiesFor, resolveDynamic, type StyleProperty } from '@/composables/styleSchema'
 import { anchorRightMiddle } from '@/composables/useDraggablePanel'
 import {
+  DEFAULT_SIZE_MODE,
   useCanvasNodes,
   type CanvasNode,
   type NodeLayout,
   type NodePosition,
+  type SizeAxis,
+  type SizeMode,
 } from '@/composables/useCanvasNodes'
 
-const { selectedNode, updateStyle, updateGeometry, updateLayout, updatePosition } =
+const { selectedNode, updateStyle, updateGeometry, updateSizeMode, updateLayout, updatePosition } =
   useCanvasNodes()
 
 /**
@@ -48,6 +51,12 @@ function setValue(property: StyleProperty, value: string) {
 
   if (property.key === 'position') {
     updatePosition(node.id, (value || 'auto') as NodePosition)
+    return
+  }
+
+  if (property.key === 'widthMode' || property.key === 'heightMode') {
+    const axis: SizeAxis = property.key === 'widthMode' ? 'width' : 'height'
+    updateSizeMode(node.id, axis, (value || DEFAULT_SIZE_MODE) as SizeMode)
     return
   }
 
@@ -94,7 +103,11 @@ function handleInput(property: StyleProperty, event: Event) {
               @change="handleInput(property, $event)"
             >
               <option value="">—</option>
-              <option v-for="option in property.options" :key="option" :value="option">
+              <option
+                v-for="option in resolveDynamic(property.options ?? [], selectedNode)"
+                :key="option"
+                :value="option"
+              >
                 {{ option }}
               </option>
             </select>
@@ -113,7 +126,7 @@ function handleInput(property: StyleProperty, event: Event) {
               :id="`field-${property.key}`"
               type="text"
               class="field__input"
-              :placeholder="property.placeholder"
+              :placeholder="resolveDynamic(property.placeholder ?? '', selectedNode)"
               :value="valueOf(selectedNode, property)"
               @input="handleInput(property, $event)"
             />
