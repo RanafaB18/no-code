@@ -158,6 +158,23 @@ const binding = computed(() => {
   outline-offset: -1px;
 }
 
+/*
+ * Not `content-visibility: auto` here, despite being the obvious cheap
+ * first move for a large document.
+ *
+ * It turns on paint containment *at all times*, not only while a subtree
+ * is being skipped, and paint containment clips descendants to the padding
+ * box. On an absolute canvas a child drawn past its parent's edge is
+ * ordinary — and `overflow` is offered as the one property that clips, so
+ * a frame must not be clipping already. Measured rather than assumed: with
+ * the rule in place, `e2e/overflow.spec.ts` finds nothing painted at a
+ * point the overhanging child covers.
+ *
+ * Culling subtrees whose geometry falls outside the viewport is the
+ * remaining lever, and that reads the stored rect rather than asking the
+ * browser to lay anything out.
+ */
+
 /* The page being designed, against the surrounding canvas. */
 .canvas-node--viewport {
   background-color: var(--color-surface-raised);
