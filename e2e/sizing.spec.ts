@@ -2,6 +2,7 @@ import { expect, test } from '@playwright/test'
 
 import {
   VIEWPORT,
+  addProperty,
   childrenOf,
   dragBy,
   drawFrame,
@@ -27,6 +28,7 @@ test.describe('Sizing modes', () => {
   }) => {
     const viewport = await rectOf(page.locator(VIEWPORT))
     await drawFrame(page, { x: viewport.x + 100, y: viewport.y + 160 }, { width: 600, height: 400 })
+    await addProperty(page, 'Appearance', 'padding')
     await page.fill('#field-padding', '50px')
 
     const parentNode = rootChildren(page).first()

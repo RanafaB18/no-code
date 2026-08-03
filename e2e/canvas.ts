@@ -100,3 +100,13 @@ export async function dragBy(page: Page, from: { x: number; y: number }, dx: num
 export async function selectAt(page: Page, point: { x: number; y: number }) {
   await page.mouse.click(point.x, point.y)
 }
+
+/**
+ * Reveals an optional inspector property from its section's `+` menu.
+ *
+ * Properties most frames never set are hidden until asked for, so a test
+ * that edits one has to open it the way a user would.
+ */
+export async function addProperty(page: Page, section: string, key: string) {
+  await page.getByLabel(`Add to ${section}`).selectOption(key)
+}

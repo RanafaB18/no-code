@@ -1,8 +1,16 @@
 <script setup lang="ts">
+import { computed, ref, watch } from 'vue'
+
 import ConstraintPins from '@/components/ConstraintPins.vue'
 import DraggablePanel from '@/components/DraggablePanel.vue'
 import { measureNodeRect } from '@/composables/nodeMeasure'
-import { propertiesFor, resolveDynamic, type StyleProperty } from '@/composables/styleSchema'
+import {
+  resolveDynamic,
+  sectionsFor,
+  type PropertySection,
+  type SectionId,
+  type StyleProperty,
+} from '@/composables/styleSchema'
 import { anchorRightMiddle } from '@/composables/useDraggablePanel'
 import {
   DEFAULT_SIZE_MODE,
@@ -114,6 +122,74 @@ function applyStanding(node: CanvasNode, standing: NonNullable<ReturnType<typeof
   updateGeometry(node.id, standing.pins)
 }
 
+/**
+ * Sections the user has folded away, by id.
+ *
+ * Tracks the *closed* ones rather than the open ones so a section added
+ * to the schema later starts open — the alternative silently hides new
+ * controls from anyone whose state predates them.
+ */
+const collapsed = ref(new Set<SectionId>())
+
+function toggleSection(id: SectionId) {
+  const next = new Set(collapsed.value)
+  if (!next.delete(id)) next.add(id)
+  collapsed.value = next
+}
+
+/**
+ * Optional properties revealed from a section's `+` menu but not yet
+ * given a value.
+ *
+ * Cleared whenever the selection changes: revealing a field is a
+ * statement about this element, and carrying it to the next one would
+ * pin open a row the user never asked to see there.
+ */
+const revealed = ref(new Set<string>())
+
+watch(
+  () => selectedNode.value?.id,
+  () => {
+    revealed.value = new Set()
+  },
+)
+
+function isSet(property: StyleProperty) {
+  const node = selectedNode.value
+  // The pin widget has no single value, so "set" does not apply to it.
+  return !!node && property.input !== 'pins' && valueOf(node, property) !== ''
+}
+
+/** Optional and unset stays hidden until it is asked for. */
+function shownIn(section: PropertySection) {
+  return section.properties.filter(
+    (property) => !property.optional || isSet(property) || revealed.value.has(property.key),
+  )
+}
+
+/** What the `+` menu can still offer for a section. */
+function addableIn(section: PropertySection) {
+  return section.properties.filter(
+    (property) => property.optional && !isSet(property) && !revealed.value.has(property.key),
+  )
+}
+
+function reveal(key: string) {
+  if (!key) return
+  revealed.value = new Set(revealed.value).add(key)
+}
+
+function handleAdd(event: Event) {
+  const target = event.target
+  if (!(target instanceof HTMLSelectElement)) return
+  reveal(target.value)
+  // Back to the placeholder, so the menu reads as an action rather than
+  // a setting that now says "Border width".
+  target.value = ''
+}
+
+const sections = computed(() => (selectedNode.value ? sectionsFor(selectedNode.value) : []))
+
 function handleInput(property: StyleProperty, event: Event) {
   const target = event.target
   if (target instanceof HTMLInputElement || target instanceof HTMLSelectElement) {
@@ -135,70 +211,108 @@ function handleInput(property: StyleProperty, event: Event) {
       <p class="inspector__type">&lt;{{ selectedNode.type }}&gt;</p>
 
       <!-- Rendered from STYLE_PROPERTIES, so adding an editable property
-           is one entry in the schema rather than a change here. -->
-      <div class="inspector__fields">
-        <div v-for="property in propertiesFor(selectedNode)" :key="property.key" class="field">
-          <label class="field__label" :for="`field-${property.key}`">{{ property.label }}</label>
+           is one entry in the schema rather than a change here — including
+           which section it lands in. -->
+      <section v-for="section in sections" :key="section.id" class="group">
+        <div class="group__bar">
+          <button
+            type="button"
+            class="group__toggle"
+            :aria-expanded="!collapsed.has(section.id)"
+            :aria-controls="`group-${section.id}`"
+            @click="toggleSection(section.id)"
+          >
+            <span class="group__chevron" aria-hidden="true">
+              {{ collapsed.has(section.id) ? '▸' : '▾' }}
+            </span>
+            {{ section.label }}
+          </button>
 
-          <!-- The widget writes geometry itself rather than producing a
+          <!-- A native select as the picker: it gives keyboard handling,
+               dismissal and positioning that a custom popover would have
+               to reimplement, for a menu that is only ever a short list. -->
+          <select
+            v-if="addableIn(section).length"
+            class="group__add"
+            :aria-label="`Add to ${section.label}`"
+            title="Add a property"
+            @change="handleAdd"
+          >
+            <option value="">+</option>
+            <option
+              v-for="property in addableIn(section)"
+              :key="property.key"
+              :value="property.key"
+            >
+              {{ property.label }}
+            </option>
+          </select>
+        </div>
+
+        <div v-show="!collapsed.has(section.id)" :id="`group-${section.id}`" class="group__fields">
+          <div v-for="property in shownIn(section)" :key="property.key" class="field">
+            <label class="field__label" :for="`field-${property.key}`">{{ property.label }}</label>
+
+            <!-- The widget writes geometry itself rather than producing a
                single value, so it stands outside the shared control row
                and its clear button. -->
-          <ConstraintPins
-            v-if="property.input === 'pins'"
-            :id="`field-${property.key}`"
-            :node="selectedNode"
-          />
-
-          <div v-else class="field__controls">
-            <select
-              v-if="property.input === 'select'"
+            <ConstraintPins
+              v-if="property.input === 'pins'"
               :id="`field-${property.key}`"
-              class="field__input"
-              :value="valueOf(selectedNode, property)"
-              @change="handleInput(property, $event)"
-            >
-              <option value="">—</option>
-              <option
-                v-for="option in resolveDynamic(property.options ?? [], selectedNode)"
-                :key="option"
-                :value="option"
+              :node="selectedNode"
+            />
+
+            <div v-else class="field__controls">
+              <select
+                v-if="property.input === 'select'"
+                :id="`field-${property.key}`"
+                class="field__input"
+                :value="valueOf(selectedNode, property)"
+                @change="handleInput(property, $event)"
               >
-                {{ option }}
-              </option>
-            </select>
+                <option value="">—</option>
+                <option
+                  v-for="option in resolveDynamic(property.options ?? [], selectedNode)"
+                  :key="option"
+                  :value="option"
+                >
+                  {{ option }}
+                </option>
+              </select>
 
-            <input
-              v-else-if="property.input === 'color'"
-              :id="`field-${property.key}`"
-              type="color"
-              class="field__input field__input--color"
-              :value="valueOf(selectedNode, property) || UNSET_COLOR"
-              @input="handleInput(property, $event)"
-            />
+              <input
+                v-else-if="property.input === 'color'"
+                :id="`field-${property.key}`"
+                type="color"
+                class="field__input field__input--color"
+                :value="valueOf(selectedNode, property) || UNSET_COLOR"
+                @input="handleInput(property, $event)"
+              />
 
-            <input
-              v-else
-              :id="`field-${property.key}`"
-              type="text"
-              class="field__input"
-              :placeholder="resolveDynamic(property.placeholder ?? '', selectedNode)"
-              :value="valueOf(selectedNode, property)"
-              @input="handleInput(property, $event)"
-            />
+              <input
+                v-else
+                :id="`field-${property.key}`"
+                type="text"
+                class="field__input"
+                :placeholder="resolveDynamic(property.placeholder ?? '', selectedNode)"
+                :value="valueOf(selectedNode, property)"
+                @input="handleInput(property, $event)"
+              />
 
-            <button
-              type="button"
-              class="field__clear"
-              :disabled="!valueOf(selectedNode, property)"
-              :aria-label="`Clear ${property.label}`"
-              title="Clear"
-              @click="setValue(property, '')"
-            >
-              ×
-            </button>
+              <button
+                type="button"
+                class="field__clear"
+                :disabled="!valueOf(selectedNode, property)"
+                :aria-label="`Clear ${property.label}`"
+                title="Clear"
+                @click="setValue(property, '')"
+              >
+                ×
+              </button>
+            </div>
           </div>
         </div>
-      </div>
+      </section>
     </template>
   </DraggablePanel>
 </template>
@@ -241,9 +355,61 @@ function handleInput(property: StyleProperty, event: Event) {
   color: var(--color-fg-subtle);
 }
 
-.inspector__fields {
+.group + .group {
+  margin-top: 0.5rem;
+  padding-top: 0.5rem;
+  border-top: 1px solid var(--color-border);
+}
+
+.group__bar {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  justify-content: space-between;
+}
+
+.group__toggle {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  flex: 1;
+  padding: 0.25rem 0;
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--color-fg-default);
+  background: none;
+  border: none;
+  cursor: pointer;
+  text-align: left;
+}
+
+.group__chevron {
+  font-size: 0.625rem;
+  color: var(--color-fg-subtle);
+}
+
+/* Sized to the '+' it shows when closed, so it reads as a button rather
+   than a dropdown sitting oddly beside a heading. */
+.group__add {
+  width: 1.5rem;
+  padding: 0 0.125rem;
+  font-size: 0.8125rem;
+  color: var(--color-fg-muted);
+  background-color: transparent;
+  border: 1px solid var(--color-border-strong);
+  border-radius: 0.25rem;
+  cursor: pointer;
+}
+
+.group__add:hover {
+  color: var(--color-fg-default);
+  border-color: var(--color-accent);
+}
+
+.group__fields {
   display: grid;
   gap: 0.625rem;
+  padding: 0.375rem 0 0.25rem;
 }
 
 .field__label {

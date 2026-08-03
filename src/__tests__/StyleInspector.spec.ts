@@ -3,10 +3,32 @@ import { mount } from '@vue/test-utils'
 import { nextTick } from 'vue'
 
 import StyleInspector from '../components/StyleInspector.vue'
-import { propertiesFor } from '../composables/styleSchema'
+import { propertiesFor, sectionsFor } from '../composables/styleSchema'
 import { useCanvasNodes } from '../composables/useCanvasNodes'
 
 const { addNode, selectNode, resetDocument } = useCanvasNodes()
+
+/**
+ * Mounts with a node selected, and reveals an optional property if asked.
+ *
+ * Optional properties are hidden until they hold a value or are picked
+ * from their section's `+` menu, so a test touching one has to open it
+ * the way a user would.
+ */
+async function mountWith(node: { id: string }, reveal?: string) {
+  selectNode(node.id)
+  const wrapper = mount(StyleInspector)
+  await nextTick()
+
+  if (reveal) {
+    // The picker that actually offers it — each section has its own.
+    const picker = wrapper
+      .findAll('.group__add')
+      .find((select) => select.find(`option[value="${reveal}"]`).exists())
+    await picker!.setValue(reveal)
+  }
+  return wrapper
+}
 
 beforeEach(() => {
   resetDocument()
@@ -22,23 +44,70 @@ describe('Inspector', () => {
     expect(wrapper.findAll('.field')).toHaveLength(0)
   })
 
-  it('renders one field per schema entry for the selected element', async () => {
+  it('renders every applicable property that is not optional', async () => {
     const node = addNode('div')
-    selectNode(node.id)
-    const wrapper = mount(StyleInspector)
-    await nextTick()
+    const wrapper = await mountWith(node)
 
-    expect(wrapper.findAll('.field')).toHaveLength(propertiesFor(node).length)
-    for (const property of propertiesFor(node)) {
+    const expected = propertiesFor(node).filter((property) => !property.optional)
+    expect(wrapper.findAll('.field')).toHaveLength(expected.length)
+    for (const property of expected) {
       expect(wrapper.find(`#field-${property.key}`).exists()).toBe(true)
     }
   })
 
+  it('groups the properties into sections, in schema order', async () => {
+    const node = addNode('div')
+    const wrapper = await mountWith(node)
+
+    // The chevron shares the button, so match on the label it carries.
+    const headings = wrapper.findAll('.group__toggle')
+    expect(headings).toHaveLength(sectionsFor(node).length)
+    sectionsFor(node).forEach((section, index) => {
+      expect(headings[index]!.text()).toContain(section.label)
+    })
+  })
+
+  it('collapses a section without losing what is in it', async () => {
+    const node = addNode('div')
+    const wrapper = await mountWith(node)
+
+    const toggle = wrapper.findAll('.group__toggle')[0]!
+    expect(toggle.attributes('aria-expanded')).toBe('true')
+
+    await toggle.trigger('click')
+    expect(toggle.attributes('aria-expanded')).toBe('false')
+
+    // v-show, not v-if: collapsing is a view state, and re-creating every
+    // control would drop focus and any half-typed value along with it.
+    expect(wrapper.find('#field-layout').exists()).toBe(true)
+  })
+
+  it('hides an optional property until it is asked for', async () => {
+    const node = addNode('div')
+    const wrapper = await mountWith(node)
+
+    // An always-visible empty box for something most frames never set
+    // costs more attention than it saves.
+    expect(wrapper.find('#field-padding').exists()).toBe(false)
+    expect(wrapper.find('.group__add option[value="padding"]').exists()).toBe(true)
+
+    const revealed = await mountWith(node, 'padding')
+    expect(revealed.find('#field-padding').exists()).toBe(true)
+  })
+
+  it('shows an optional property that already has a value', async () => {
+    const node = addNode('div', { styles: { padding: '2rem' } })
+    const wrapper = await mountWith(node)
+
+    // Set means visible — otherwise a value would be in effect with no
+    // control anywhere to see or undo it.
+    expect(wrapper.find('#field-padding').exists()).toBe(true)
+    expect(wrapper.find('.group__add option[value="padding"]').exists()).toBe(false)
+  })
+
   it('writes a typed value onto the selected element', async () => {
     const element = addNode('div')
-    selectNode(element.id)
-    const wrapper = mount(StyleInspector)
-    await nextTick()
+    const wrapper = await mountWith(element, 'padding')
 
     await wrapper.get('#field-padding').setValue('1rem')
 
@@ -47,9 +116,7 @@ describe('Inspector', () => {
 
   it('writes node fields to the node, not into styles', async () => {
     const element = addNode('div')
-    selectNode(element.id)
-    const wrapper = mount(StyleInspector)
-    await nextTick()
+    const wrapper = await mountWith(element, 'overflow')
 
     await wrapper.get('#field-layout').setValue('grid')
     await wrapper.get('#field-width').setValue('320')
@@ -69,9 +136,7 @@ describe('Inspector', () => {
 
   it('writes a chosen option from a select field', async () => {
     const element = addNode('div')
-    selectNode(element.id)
-    const wrapper = mount(StyleInspector)
-    await nextTick()
+    const wrapper = await mountWith(element, 'borderStyle')
 
     await wrapper.get('#field-borderStyle').setValue('dashed')
 
@@ -80,9 +145,7 @@ describe('Inspector', () => {
 
   it('clears a property back to unset', async () => {
     const element = addNode('div', { styles: { padding: '2rem' } })
-    selectNode(element.id)
-    const wrapper = mount(StyleInspector)
-    await nextTick()
+    const wrapper = await mountWith(element)
 
     const clear = wrapper.get('[aria-label="Clear Padding"]')
     expect(clear.attributes('disabled')).toBeUndefined()
@@ -93,9 +156,7 @@ describe('Inspector', () => {
   })
 
   it('disables the clear button while a property is unset', async () => {
-    selectNode(addNode('div').id)
-    const wrapper = mount(StyleInspector)
-    await nextTick()
+    const wrapper = await mountWith(addNode('div'), 'padding')
 
     expect(wrapper.get('[aria-label="Clear Padding"]').attributes('disabled')).toBeDefined()
   })

@@ -56,10 +56,35 @@ export function resolveDynamic<T>(value: Dynamic<T>, node: CanvasNode): T {
   return typeof value === 'function' ? (value as (node: CanvasNode) => T)(node) : value
 }
 
+/**
+ * The inspector's groups, in panel order.
+ *
+ * A flat list of twenty-odd controls is unreadable, and the grouping is
+ * not cosmetic: `layout` is what this frame does to its children, while
+ * `position` and `size` are what happens to the frame itself. Keeping
+ * that boundary visible is most of what makes the panel legible.
+ */
+export const SECTIONS = [
+  { id: 'layout', label: 'Layout' },
+  { id: 'position', label: 'Position' },
+  { id: 'size', label: 'Size' },
+  { id: 'appearance', label: 'Appearance' },
+] as const
+
+export type SectionId = (typeof SECTIONS)[number]['id']
+
 export interface StyleProperty {
   /** For `style`, the camelCase CSS property. For `node`, the field name. */
   key: string
   label: string
+  section: SectionId
+  /**
+   * Hidden until it has a value, or until it is picked from the section's
+   * `+` menu. For properties most frames never set — borders, radius,
+   * overflow — where an always-visible empty box costs more attention
+   * than it saves.
+   */
+  optional?: boolean
   input: StyleInputType
   source: PropertySource
   /** Only meaningful for `input: 'select'`. */
@@ -133,18 +158,34 @@ function unitFor(axis: SizeAxis) {
 
 export const STYLE_PROPERTIES: readonly StyleProperty[] = [
   // Layout — how this frame arranges its children.
-  { key: 'layout', label: 'Layout', input: 'select', source: 'node', options: LAYOUT_VALUES },
+  {
+    key: 'layout',
+    section: 'layout',
+    label: 'Layout',
+    input: 'select',
+    source: 'node',
+    options: LAYOUT_VALUES,
+  },
   {
     key: 'flexDirection',
+    section: 'layout',
     label: 'Direction',
     input: 'select',
     source: 'style',
     options: ['row', 'column'],
     appliesTo: laysOutChildren,
   },
-  { key: 'gap', label: 'Gap', input: 'length', source: 'style', appliesTo: laysOutChildren },
+  {
+    key: 'gap',
+    section: 'layout',
+    label: 'Gap',
+    input: 'length',
+    source: 'style',
+    appliesTo: laysOutChildren,
+  },
   {
     key: 'justifyContent',
+    section: 'layout',
     label: 'Justify',
     input: 'select',
     source: 'style',
@@ -153,6 +194,7 @@ export const STYLE_PROPERTIES: readonly StyleProperty[] = [
   },
   {
     key: 'alignItems',
+    section: 'layout',
     label: 'Align',
     input: 'select',
     source: 'style',
@@ -165,6 +207,7 @@ export const STYLE_PROPERTIES: readonly StyleProperty[] = [
   // values would do nothing.
   {
     key: 'position',
+    section: 'position',
     label: 'Type',
     input: 'select',
     source: 'node',
@@ -174,29 +217,80 @@ export const STYLE_PROPERTIES: readonly StyleProperty[] = [
     // control anyway would be offering one that silently does nothing.
     appliesTo: (node) => !isViewport(node.id),
   },
-  { key: 'pins', label: 'Constraints', input: 'pins', source: 'node', appliesTo: isPositioned },
+  {
+    key: 'pins',
+    section: 'position',
+    label: 'Constraints',
+    input: 'pins',
+    source: 'node',
+    appliesTo: isPositioned,
+  },
   // One field per pinned edge. An unpinned edge has no distance to show,
   // so an empty box there would invite typing a value the widget is the
   // only way to actually establish.
-  { key: 'left', label: 'Left', input: 'number', source: 'node', appliesTo: pinned('left') },
-  { key: 'right', label: 'Right', input: 'number', source: 'node', appliesTo: pinned('right') },
-  { key: 'top', label: 'Top', input: 'number', source: 'node', appliesTo: pinned('top') },
-  { key: 'bottom', label: 'Bottom', input: 'number', source: 'node', appliesTo: pinned('bottom') },
+  {
+    key: 'left',
+    section: 'position',
+    label: 'Left',
+    input: 'number',
+    source: 'node',
+    appliesTo: pinned('left'),
+  },
+  {
+    key: 'right',
+    section: 'position',
+    label: 'Right',
+    input: 'number',
+    source: 'node',
+    appliesTo: pinned('right'),
+  },
+  {
+    key: 'top',
+    section: 'position',
+    label: 'Top',
+    input: 'number',
+    source: 'node',
+    appliesTo: pinned('top'),
+  },
+  {
+    key: 'bottom',
+    section: 'position',
+    label: 'Bottom',
+    input: 'number',
+    source: 'node',
+    appliesTo: pinned('bottom'),
+  },
 
   // Size — a mode per axis, then the number that mode reads. The number
   // is hidden under `fill` and `fit`, which take no value at all.
-  { key: 'widthMode', label: 'Width', input: 'select', source: 'node', options: sizeModesFor },
+  {
+    key: 'widthMode',
+    section: 'size',
+    label: 'Width',
+    input: 'select',
+    source: 'node',
+    options: sizeModesFor,
+  },
   {
     key: 'width',
+    section: 'size',
     label: 'W',
     input: 'number',
     source: 'node',
     placeholder: unitFor('width'),
     appliesTo: statesSize('width'),
   },
-  { key: 'heightMode', label: 'Height', input: 'select', source: 'node', options: sizeModesFor },
+  {
+    key: 'heightMode',
+    section: 'size',
+    label: 'Height',
+    input: 'select',
+    source: 'node',
+    options: sizeModesFor,
+  },
   {
     key: 'height',
+    section: 'size',
     label: 'H',
     input: 'number',
     source: 'node',
@@ -205,18 +299,58 @@ export const STYLE_PROPERTIES: readonly StyleProperty[] = [
   },
 
   // Appearance.
-  { key: 'padding', label: 'Padding', input: 'length', source: 'style', placeholder: '0' },
-  { key: 'backgroundColor', label: 'Background', input: 'color', source: 'style' },
-  { key: 'borderWidth', label: 'Border width', input: 'length', source: 'style', placeholder: '0' },
+  {
+    key: 'padding',
+    section: 'appearance',
+    optional: true,
+    label: 'Padding',
+    input: 'length',
+    source: 'style',
+    placeholder: '0',
+  },
+  {
+    key: 'backgroundColor',
+    section: 'appearance',
+    optional: true,
+    label: 'Background',
+    input: 'color',
+    source: 'style',
+  },
+  {
+    key: 'borderWidth',
+    section: 'appearance',
+    optional: true,
+    label: 'Border width',
+    input: 'length',
+    source: 'style',
+    placeholder: '0',
+  },
   {
     key: 'borderStyle',
+    section: 'appearance',
+    optional: true,
     label: 'Border style',
     input: 'select',
     source: 'style',
     options: ['none', 'solid', 'dashed', 'dotted'],
   },
-  { key: 'borderColor', label: 'Border color', input: 'color', source: 'style' },
-  { key: 'borderRadius', label: 'Radius', input: 'length', source: 'style', placeholder: '0' },
+  {
+    key: 'borderColor',
+    section: 'appearance',
+    optional: true,
+    label: 'Border color',
+    input: 'color',
+    source: 'style',
+  },
+  {
+    key: 'borderRadius',
+    section: 'appearance',
+    optional: true,
+    label: 'Radius',
+    input: 'length',
+    source: 'style',
+    placeholder: '0',
+  },
 
   /**
    * `overflow` defaults to `visible`, so a child that outgrows its parent
@@ -229,6 +363,8 @@ export const STYLE_PROPERTIES: readonly StyleProperty[] = [
    */
   {
     key: 'overflow',
+    section: 'appearance',
+    optional: true,
     label: 'Overflow',
     input: 'select',
     source: 'style',
@@ -239,6 +375,27 @@ export const STYLE_PROPERTIES: readonly StyleProperty[] = [
 /** The properties that apply to a node, in schema order. */
 export function propertiesFor(node: CanvasNode): readonly StyleProperty[] {
   return STYLE_PROPERTIES.filter((property) => property.appliesTo?.(node) ?? true)
+}
+
+export interface PropertySection {
+  id: SectionId
+  label: string
+  properties: readonly StyleProperty[]
+}
+
+/**
+ * The applicable properties, grouped.
+ *
+ * Sections with nothing in them are dropped rather than rendered empty —
+ * a frame with no layout has no flex options to offer, and a heading over
+ * a void reads as something failing to load.
+ */
+export function sectionsFor(node: CanvasNode): readonly PropertySection[] {
+  const applicable = propertiesFor(node)
+  return SECTIONS.map((section) => ({
+    ...section,
+    properties: applicable.filter((property) => property.section === section.id),
+  })).filter((section) => section.properties.length > 0)
 }
 
 /**

@@ -2,6 +2,7 @@ import { expect, test } from '@playwright/test'
 
 import {
   VIEWPORT,
+  addProperty,
   armFrame,
   childrenOf,
   drawFrame,
@@ -39,6 +40,9 @@ test.describe('Drawing', () => {
     await drawFrame(page, { x: viewport.x + 80, y: viewport.y + 160 }, { width: 560, height: 420 })
 
     // Drawing selects what it drew, so the inspector is already on it.
+    for (const key of ['borderStyle', 'borderWidth', 'padding']) {
+      await addProperty(page, 'Appearance', key)
+    }
     await page.selectOption('#field-borderStyle', 'solid')
     await page.fill('#field-borderWidth', '10px')
     await page.fill('#field-padding', '24px')

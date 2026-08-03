@@ -59,8 +59,11 @@ defineExpose({ settle })
 .panel {
   position: fixed;
   /* Above the workspace, so panels stay usable while a tool is armed and
-     the workspace is capturing drags. */
-  z-index: 20;
+     the workspace is capturing drags — and above the theme switch, which
+     is fixed to a corner a panel can be dragged over or simply grow into.
+     Equal z-indexes there left DOM order to decide, and it decided
+     against the panel the user was actually working in. */
+  z-index: 30;
   border: 1px solid var(--color-border);
   border-radius: 0.5rem;
 }
