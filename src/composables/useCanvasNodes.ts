@@ -326,6 +326,28 @@ export function usesSizeValue(mode: SizeMode): boolean {
   return mode === 'fixed' || mode === 'relative'
 }
 
+/** The two edges bounding an axis, opposite ends first-listed as the origin. */
+export const AXIS_EDGES = {
+  width: ['left', 'right'],
+  height: ['top', 'bottom'],
+} as const satisfies Record<SizeAxis, readonly (keyof NodeGeometry)[]>
+
+/**
+ * True when both edges of an axis are pinned.
+ *
+ * The size is then **derived** from the parent rather than stated — the
+ * element stretches as the parent widens, which is the whole point of
+ * modelling geometry as edge pins instead of x/y/w/h.
+ *
+ * Every consumer asks this rather than checking the two fields itself:
+ * the renderer must withhold the stated size, and the inspector must stop
+ * offering to edit it.
+ */
+export function stretchesAxis(node: CanvasNode, axis: SizeAxis): boolean {
+  const [start, end] = AXIS_EDGES[axis]
+  return node[start] !== undefined && node[end] !== undefined
+}
+
 /** O(1). */
 export function updateLayout(id: NodeId, layout: NodeLayout): void {
   const node = getNode(id)

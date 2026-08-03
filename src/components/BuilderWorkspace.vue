@@ -3,6 +3,7 @@ import { computed, ref, useTemplateRef, watch } from 'vue'
 import { useEventListener } from '@vueuse/core'
 
 import NodeRenderer from '@/components/NodeRenderer.vue'
+import { measureNodeRect, nodeElement, toLocal, type Rect } from '@/composables/nodeMeasure'
 import { onResizeFrame } from '@/composables/useViewport'
 import { useCanvasShortcuts } from '@/composables/useCanvasShortcuts'
 import { useTools } from '@/composables/useTools'
@@ -11,6 +12,7 @@ import {
   getNode,
   isViewport,
   resolvedPosition,
+  stretchesAxis,
   useCanvasNodes,
   type CanvasNode,
   type NodeGeometry,
@@ -42,73 +44,14 @@ const dropTargetLayout = computed(() => getNode(dropTargetId.value)?.layout ?? '
 
 const workspace = useTemplateRef<HTMLElement>('workspace')
 
-interface Rect {
-  left: number
-  top: number
-  width: number
-  height: number
-}
-
 /**
- * A node's rendered element.
- *
- * Looked up by attribute rather than a ref-callback map: an inline `:ref`
- * arrow is a new function each render, so Vue would tear the entry down
- * and rebuild it on every re-render. This costs one query, only when
- * something actually needs measuring.
+ * An element's box in pixels relative to `.workspace` — the space the
+ * selection and drop-target overlays are positioned in.
  */
-function elementFor(id: NodeId | null | undefined): HTMLElement | null {
-  if (!id) return null
-  return workspace.value?.querySelector<HTMLElement>(`[data-node-id="${id}"]`) ?? null
-}
-
-/**
- * Rebases a viewport-relative box onto `container`'s **padding box** —
- * the coordinate space both absolute offsets and workspace overlays live
- * in.
- *
- * Both rects are viewport-relative, so subtracting them cancels page
- * scroll — and unlike offsetLeft/offsetTop the result holds regardless of
- * which ancestor happens to be the offsetParent. That assumption was only
- * ever true because elements were `position: static` with `.workspace` as
- * the nearest positioned ancestor; nesting and an editable position both
- * undermine it.
- *
- * `clientLeft`/`clientTop` are the container's own border widths, which
- * sit between its border box and the padding box the offsets resolve
- * from. Skip them and every child of a bordered frame lands short by the
- * border's width.
- *
- * A null container means "already in the right space" — the caller had
- * nothing to rebase onto.
- */
-function toLocal(box: Rect, container: HTMLElement | null): Rect {
-  if (!container) return { ...box }
-
-  const origin = container.getBoundingClientRect()
-  return {
-    left: box.left - origin.left - container.clientLeft,
-    top: box.top - origin.top - container.clientTop,
-    width: box.width,
-    height: box.height,
-  }
-}
-
-/** An element's box in pixels relative to `.workspace`. */
 function measureRect(id: NodeId | null): Rect | null {
-  const element = elementFor(id)
+  const element = nodeElement(id)
   if (!element || !workspace.value) return null
   return toLocal(element.getBoundingClientRect(), workspace.value)
-}
-
-/**
- * A node's box in **parent-local** pixels — the same space its pins live
- * in, so a measurement can stand in for a pin the node doesn't carry.
- */
-function measureLocalRect(id: NodeId): Rect | null {
-  const element = elementFor(id)
-  if (!element) return null
-  return toLocal(element.getBoundingClientRect(), elementFor(getNode(id)?.parentId))
 }
 
 /** Turns a measured rect into overlay positioning, grown by `gap` a side. */
@@ -378,6 +321,15 @@ interface Transform {
    * by clearing rather than by writing a zero.
    */
   restore: NodeGeometry
+  /**
+   * Edges whose pin this gesture gave up at the start.
+   *
+   * Dragging an edge of a stretched axis — one pinned at both ends —
+   * states a size where the parent had been deriving one. Something has
+   * to give, and it is the edge under the pointer: the opposite one
+   * anchors, so the box resizes from the side you are not holding.
+   */
+  released: readonly Edge[]
   /** Stays false until the pointer clears MIN_DRAG, so a click is not a drag. */
   moved: boolean
 }
@@ -389,6 +341,14 @@ let transform: Transform | null = null
  * negative one would flip the box inside out.
  */
 const MIN_SIZE = 1
+
+/** The edge across the box from each, for deciding which one anchors. */
+const OPPOSITE_EDGE: Record<Edge, Edge> = {
+  top: 'bottom',
+  bottom: 'top',
+  left: 'right',
+  right: 'left',
+}
 
 /** Which edges govern which axis, for turning a resize into a size mode. */
 const RESIZE_AXES = [
@@ -421,6 +381,21 @@ function releasePointer(pointerId: number) {
 }
 
 /**
+ * The size a gesture starts from, in rendered pixels.
+ *
+ * The stored number is only that when the axis is `fixed` and states its
+ * own size. A stretched axis derives its size from the parent, and a
+ * `relative` one stores a percentage — in both cases the stored number is
+ * not what is on screen, and dragging from it would jump the box to a
+ * size the user never saw.
+ */
+function startSize(node: CanvasNode, measured: Rect | null, axis: SizeAxis) {
+  const mode = axis === 'width' ? node.widthMode : node.heightMode
+  const stated = mode === 'fixed' && !stretchesAxis(node, axis)
+  return (stated ? node[axis] : undefined) ?? measured?.[axis] ?? 0
+}
+
+/**
  * Starts a move (no edges) or a resize (the handle's edges).
  *
  * The starting box falls back to a measurement per field, because a node
@@ -434,20 +409,40 @@ function beginTransform(event: PointerEvent, nodeId: NodeId, edges: readonly Edg
   // position against and no parent to reorder it among.
   if (!node || isViewport(nodeId)) return
 
-  const measured = measureLocalRect(nodeId)
+  const measured = measureNodeRect(nodeId)
+  const released = edges.filter((edge) => node[OPPOSITE_EDGE[edge]] !== undefined)
+
   transform = {
     nodeId,
     edges,
+    released,
     absolute: resolvedPosition(node) === 'absolute',
     origin: { x: event.clientX, y: event.clientY },
     start: {
       left: node.left ?? measured?.left ?? 0,
       top: node.top ?? measured?.top ?? 0,
-      width: node.width ?? measured?.width ?? 0,
-      height: node.height ?? measured?.height ?? 0,
+      width: startSize(node, measured, 'width'),
+      height: startSize(node, measured, 'height'),
     },
-    restore: { left: node.left, top: node.top, width: node.width, height: node.height },
+    // All four pins, not just the origin pair: a gesture can drop one, so
+    // cancelling has to be able to put it back.
+    restore: {
+      left: node.left,
+      right: node.right,
+      top: node.top,
+      bottom: node.bottom,
+      width: node.width,
+      height: node.height,
+    },
     moved: false,
+  }
+
+  // Snapshotted above first, so Escape can restore what this drops.
+  if (released.length > 0) {
+    updateGeometry(
+      nodeId,
+      Object.fromEntries(released.map((edge) => [edge, undefined])) as NodeGeometry,
+    )
   }
 
   capturePointer(event.pointerId)
@@ -466,18 +461,23 @@ function resizeGeometry(active: Transform, dx: number, dy: number): NodeGeometry
   const { left, top, width, height } = active.start
   const patch: NodeGeometry = {}
 
+  // The origin only moves for an edge this gesture still holds. A
+  // released one is now derived from the anchor opposite it, so writing
+  // the pin back would stretch the box again on the very next frame.
+  const holds = (edge: Edge) => active.absolute && !active.released.includes(edge)
+
   if (active.edges.includes('right')) patch.width = Math.max(MIN_SIZE, width + dx)
   if (active.edges.includes('left')) {
     const next = Math.max(MIN_SIZE, width - dx)
     patch.width = next
-    if (active.absolute) patch.left = left + (width - next)
+    if (holds('left')) patch.left = left + (width - next)
   }
 
   if (active.edges.includes('bottom')) patch.height = Math.max(MIN_SIZE, height + dy)
   if (active.edges.includes('top')) {
     const next = Math.max(MIN_SIZE, height - dy)
     patch.height = next
-    if (active.absolute) patch.top = top + (height - next)
+    if (holds('top')) patch.top = top + (height - next)
   }
 
   return patch
@@ -503,7 +503,7 @@ function insertionIndex(node: CanvasNode, point: { x: number; y: number }): numb
   for (const siblingId of parent.childrenIds) {
     if (siblingId === node.id) continue
 
-    const element = elementFor(siblingId)
+    const element = nodeElement(siblingId)
     if (!element) continue
 
     const box = element.getBoundingClientRect()

@@ -80,6 +80,33 @@ test.describe('Sizing modes', () => {
     expectNear((await rectOf(children.nth(1))).width, 300, 'second of two')
   })
 
+  test('a filling frame keeps its size when it leaves the flow', async ({ page }) => {
+    const viewport = await rectOf(page.locator(VIEWPORT))
+    await drawFrame(
+      page,
+      { x: viewport.x + 100, y: viewport.y + 160 },
+      { width: 600, height: 300 },
+      'flex',
+    )
+
+    const parentNode = rootChildren(page).first()
+    const parent = await rectOf(parentNode)
+    await drawFrame(page, { x: parent.x + 400, y: parent.y + 200 }, { width: 120, height: 90 })
+    await page.selectOption('#field-widthMode', 'fill')
+
+    const child = childrenOf(parentNode).first()
+    const filled = await rectOf(child)
+    expectNear(filled.width, 600, 'filled width')
+
+    await page.selectOption('#field-position', 'absolute')
+
+    // `fill` is granted by the parent's layout, which has stopped placing
+    // this node — left alone the box would collapse to nothing instead of
+    // holding the width it was visibly occupying a moment earlier.
+    await expect(page.locator('#field-widthMode')).toHaveValue('fixed')
+    expectBox(await rectOf(child), { width: filled.width, x: filled.x, y: filled.y })
+  })
+
   test('fill is not offered to a node its parent does not lay out', async ({ page }) => {
     const viewport = await rectOf(page.locator(VIEWPORT))
     await drawFrame(page, { x: viewport.x + 100, y: viewport.y + 160 }, { width: 600, height: 400 })

@@ -1,6 +1,7 @@
 import {
   isViewport,
   resolvedPosition,
+  stretchesAxis,
   usesSizeValue,
   type CanvasNode,
   type NodeLayout,
@@ -27,8 +28,10 @@ import {
  *   'length'  free-text CSS length ('12px', '1rem', 'auto')
  *   'color'   native colour picker
  *   'select'  dropdown constrained to the property's `options`
+ *   'pins'    the constraint widget — no single value, so it renders its
+ *             own control and writes through directly
  */
-export type StyleInputType = 'number' | 'length' | 'color' | 'select'
+export type StyleInputType = 'number' | 'length' | 'color' | 'select' | 'pins'
 
 /**
  * Where a value lives.
@@ -105,6 +108,23 @@ function sizeModesFor(node: CanvasNode): readonly string[] {
   return SIZE_MODES.filter((mode) => mode !== 'fill')
 }
 
+/** True when an edge is pinned, so its distance is real and editable. */
+function pinned(edge: 'left' | 'right' | 'top' | 'bottom') {
+  return (node: CanvasNode) => isPositioned(node) && node[edge] !== undefined
+}
+
+/**
+ * True when the axis has a size to state.
+ *
+ * Both a mode that reads no number and a pair of pins that derive the
+ * size take the field away — in the second case because the parent
+ * decides it, and offering a box would imply otherwise.
+ */
+function statesSize(axis: SizeAxis) {
+  return (node: CanvasNode) =>
+    usesSizeValue(axis === 'width' ? node.widthMode : node.heightMode) && !stretchesAxis(node, axis)
+}
+
 /** The unit the number beside a mode is read in. */
 function unitFor(axis: SizeAxis) {
   return (node: CanvasNode) =>
@@ -154,8 +174,14 @@ export const STYLE_PROPERTIES: readonly StyleProperty[] = [
     // control anyway would be offering one that silently does nothing.
     appliesTo: (node) => !isViewport(node.id),
   },
-  { key: 'left', label: 'Left', input: 'number', source: 'node', appliesTo: isPositioned },
-  { key: 'top', label: 'Top', input: 'number', source: 'node', appliesTo: isPositioned },
+  { key: 'pins', label: 'Constraints', input: 'pins', source: 'node', appliesTo: isPositioned },
+  // One field per pinned edge. An unpinned edge has no distance to show,
+  // so an empty box there would invite typing a value the widget is the
+  // only way to actually establish.
+  { key: 'left', label: 'Left', input: 'number', source: 'node', appliesTo: pinned('left') },
+  { key: 'right', label: 'Right', input: 'number', source: 'node', appliesTo: pinned('right') },
+  { key: 'top', label: 'Top', input: 'number', source: 'node', appliesTo: pinned('top') },
+  { key: 'bottom', label: 'Bottom', input: 'number', source: 'node', appliesTo: pinned('bottom') },
 
   // Size — a mode per axis, then the number that mode reads. The number
   // is hidden under `fill` and `fit`, which take no value at all.
@@ -166,7 +192,7 @@ export const STYLE_PROPERTIES: readonly StyleProperty[] = [
     input: 'number',
     source: 'node',
     placeholder: unitFor('width'),
-    appliesTo: (node) => usesSizeValue(node.widthMode),
+    appliesTo: statesSize('width'),
   },
   { key: 'heightMode', label: 'Height', input: 'select', source: 'node', options: sizeModesFor },
   {
@@ -175,7 +201,7 @@ export const STYLE_PROPERTIES: readonly StyleProperty[] = [
     input: 'number',
     source: 'node',
     placeholder: unitFor('height'),
-    appliesTo: (node) => usesSizeValue(node.heightMode),
+    appliesTo: statesSize('height'),
   },
 
   // Appearance.

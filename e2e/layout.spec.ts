@@ -1,4 +1,4 @@
-import { test } from '@playwright/test'
+import { expect, test } from '@playwright/test'
 
 import {
   VIEWPORT,
@@ -78,6 +78,16 @@ test.describe('Layout', () => {
 
     // The second is still selected from drawing it.
     await page.selectOption('#field-position', 'absolute')
+
+    // Leaving the flow does not move it, which takes work: the static
+    // position of an absolutely positioned flex child is the container's
+    // content-box origin, so an unpinned box would snap back to the start
+    // of the row however far along it had been. The switch measures first
+    // and pins after.
+    expectBox(await rectOf(children.nth(1)), { x: secondInFlow.x, y: secondInFlow.y })
+    expect(secondInFlow.x).toBeGreaterThan(parent.x)
+    await expect(page.locator('#field-left')).toHaveValue(String(secondInFlow.x - parent.x))
+
     await page.fill('#field-left', '400')
     await page.fill('#field-top', '250')
 

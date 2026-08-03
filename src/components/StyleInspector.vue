@@ -1,11 +1,15 @@
 <script setup lang="ts">
+import ConstraintPins from '@/components/ConstraintPins.vue'
 import DraggablePanel from '@/components/DraggablePanel.vue'
+import { measureNodeRect } from '@/composables/nodeMeasure'
 import { propertiesFor, resolveDynamic, type StyleProperty } from '@/composables/styleSchema'
 import { anchorRightMiddle } from '@/composables/useDraggablePanel'
 import {
   DEFAULT_SIZE_MODE,
+  resolvedPosition,
   useCanvasNodes,
   type CanvasNode,
+  type NodeGeometry,
   type NodeLayout,
   type NodePosition,
   type SizeAxis,
@@ -50,7 +54,13 @@ function setValue(property: StyleProperty, value: string) {
   }
 
   if (property.key === 'position') {
-    updatePosition(node.id, (value || 'auto') as NodePosition)
+    const next = (value || 'auto') as NodePosition
+    // Measured while it is still where it is, and pinned after the switch
+    // — the two halves of leaving the flow without moving.
+    const standing =
+      next === 'absolute' && resolvedPosition(node) === 'relative' ? pinsFor(node) : null
+    updatePosition(node.id, next)
+    if (standing) applyStanding(node, standing)
     return
   }
 
@@ -66,6 +76,42 @@ function setValue(property: StyleProperty, value: string) {
   const numeric = value === '' ? undefined : Number(value)
   if (numeric !== undefined && !Number.isFinite(numeric)) return
   updateGeometry(node.id, { [property.key]: numeric })
+}
+
+/**
+ * Where a node stands right now, as pins.
+ *
+ * Leaving the flow otherwise moves it, and not subtly: the static
+ * position of an absolutely positioned flex child is the container's
+ * content-box origin, so an unpinned box jumps back to the start of the
+ * row however far along it had been. Measuring first is the only way to
+ * stay put, and only the DOM knows the answer.
+ */
+function pinsFor(node: CanvasNode) {
+  const rect = measureNodeRect(node.id)
+  if (!rect) return null
+
+  const pins: NodeGeometry = {}
+  // Only for an axis with nothing holding it — an edge the user already
+  // pinned is a decision, not a gap to fill in.
+  if (node.left === undefined && node.right === undefined) pins.left = Math.round(rect.left)
+  if (node.top === undefined && node.bottom === undefined) pins.top = Math.round(rect.top)
+
+  // `fill` is granted by the parent's layout, which has stopped placing
+  // this node — left alone the box would collapse to nothing.
+  const filling = (['width', 'height'] as const).filter(
+    (axis) => (axis === 'width' ? node.widthMode : node.heightMode) === 'fill',
+  )
+  for (const axis of filling) pins[axis] = Math.round(rect[axis])
+
+  return { pins, filling }
+}
+
+function applyStanding(node: CanvasNode, standing: NonNullable<ReturnType<typeof pinsFor>>) {
+  // Modes first: updateSizeMode clears the number for the mode it leaves,
+  // so writing the measured size before it would undo the freeze.
+  for (const axis of standing.filling) updateSizeMode(node.id, axis, 'fixed')
+  updateGeometry(node.id, standing.pins)
 }
 
 function handleInput(property: StyleProperty, event: Event) {
@@ -94,7 +140,16 @@ function handleInput(property: StyleProperty, event: Event) {
         <div v-for="property in propertiesFor(selectedNode)" :key="property.key" class="field">
           <label class="field__label" :for="`field-${property.key}`">{{ property.label }}</label>
 
-          <div class="field__controls">
+          <!-- The widget writes geometry itself rather than producing a
+               single value, so it stands outside the shared control row
+               and its clear button. -->
+          <ConstraintPins
+            v-if="property.input === 'pins'"
+            :id="`field-${property.key}`"
+            :node="selectedNode"
+          />
+
+          <div v-else class="field__controls">
             <select
               v-if="property.input === 'select'"
               :id="`field-${property.key}`"

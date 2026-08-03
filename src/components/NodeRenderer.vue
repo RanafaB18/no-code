@@ -6,6 +6,7 @@ import {
   getNode,
   isViewport,
   resolvedPosition,
+  stretchesAxis,
   type CanvasNode,
   type NodeId,
   type SizeAxis,
@@ -91,6 +92,12 @@ function geometryFor(current: CanvasNode) {
   if (position !== 'absolute') return size
   return {
     ...size,
+    // Pinning both edges of an axis derives the size from the parent, so
+    // the stated one is withheld. Emitting all three over-constrains the
+    // box, and CSS resolves that by dropping `right` — silently undoing
+    // the pin just set, which would read as the widget being broken.
+    width: stretchesAxis(current, 'width') ? undefined : size.width,
+    height: stretchesAxis(current, 'height') ? undefined : size.height,
     left: px(current.left),
     right: px(current.right),
     top: px(current.top),
