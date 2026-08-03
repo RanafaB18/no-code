@@ -11,6 +11,15 @@ import { useDraggablePanel, type PanelAnchor } from '@/composables/useDraggableP
  * The `handle` slot is the grab area. It is a slot rather than a fixed
  * bar because the two panels want different content there — a bare grip
  * versus a grip plus title — while needing identical drag behaviour.
+ *
+ * The root carries `data-shortcut-boundary`: a panel is chrome, so a
+ * keystroke inside it belongs to whatever control has focus and must not
+ * reach the canvas — Backspace on a toolbar button is not a request to
+ * delete the selection. See `useCanvasShortcuts`.
+ *
+ * It is documented here rather than as a template comment because a
+ * comment beside the root would make this a fragment, and the panel has
+ * to stay single-root for its class and style bindings to land.
  */
 const props = defineProps<{
   anchor: PanelAnchor
@@ -36,6 +45,7 @@ defineExpose({ settle })
     class="panel"
     :class="[`panel--${surface ?? 'raised'}`, { 'panel--dragging': isDragging }]"
     :style="style"
+    data-shortcut-boundary
   >
     <div ref="handle" class="panel__handle">
       <slot name="handle" />

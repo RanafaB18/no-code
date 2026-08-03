@@ -1,4 +1,5 @@
 import {
+  isViewport,
   resolvedPosition,
   type CanvasNode,
   type NodeLayout,
@@ -105,6 +106,10 @@ export const STYLE_PROPERTIES: readonly StyleProperty[] = [
     input: 'select',
     source: 'node',
     options: POSITION_VALUES,
+    // The viewport is the coordinate origin — there is nothing above it to
+    // position against — so `updatePosition` refuses it. Offering the
+    // control anyway would be offering one that silently does nothing.
+    appliesTo: (node) => !isViewport(node.id),
   },
   { key: 'left', label: 'Left', input: 'number', source: 'node', appliesTo: isPositioned },
   { key: 'top', label: 'Top', input: 'number', source: 'node', appliesTo: isPositioned },

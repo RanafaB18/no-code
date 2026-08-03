@@ -186,6 +186,18 @@ describe('useCanvasNodes', () => {
       expect(selectedNode.value?.id).toBe(parent.id)
     })
 
+    it('clears rather than landing on the viewport, which is not selectable', () => {
+      const node = addNode('div')
+      selectNode(node.id)
+
+      removeNode(node.id)
+
+      // The viewport is the document, not an element. Selecting it here
+      // would be a back door into editing the canvas that no other
+      // interaction offers.
+      expect(selectedNode.value).toBeNull()
+    })
+
     it('refuses to remove the viewport', () => {
       removeNode(VIEWPORT_ID)
       expect(getNode(VIEWPORT_ID)).not.toBeNull()

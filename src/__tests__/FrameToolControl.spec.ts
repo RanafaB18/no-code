@@ -70,10 +70,11 @@ describe('FrameToolControl', () => {
     await wrapper.get('.toolbar__button').trigger('click')
     await nextTick()
 
-    // Load-bearing: useToolShortcuts skips keydown whose target matches
-    // 'input, textarea, select', so focus being inside the menu is what
-    // stops a stray digit from re-arming behind the menu's back. It also
-    // means Escape needs its own local handler — see below.
+    // Load-bearing: useCanvasShortcuts ignores keydown from inside a
+    // data-shortcut-boundary, which the toolbar panel carries, so focus
+    // being inside the menu is what stops a stray digit from re-arming
+    // behind the menu's back. It also means Escape needs its own local
+    // handler — see below.
     expect(document.activeElement?.tagName).toBe('INPUT')
   })
 

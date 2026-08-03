@@ -20,7 +20,10 @@ const options: ReadonlyArray<{ value: ThemePreference; label: string }> = [
     The inputs are visually hidden but never display:none, so they stay
     focusable and keyboard-reachable.
   -->
-  <fieldset class="theme-toggle">
+  <!-- Chrome, like the panels, even though it floats on its own rather
+       than inside one: its radios take focus, and a digit typed there is
+       arrow-key navigation of this group, not a request to arm a tool. -->
+  <fieldset class="theme-toggle" data-shortcut-boundary>
     <legend class="visually-hidden">Theme</legend>
 
     <label

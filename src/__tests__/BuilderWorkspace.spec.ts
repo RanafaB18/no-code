@@ -57,6 +57,23 @@ function pressKey(key: string) {
   window.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true }))
 }
 
+/**
+ * A control inside a shortcut boundary — a stand-in for any floating
+ * panel, which is what carries the attribute in the real app.
+ *
+ * Returns the boundary too, so the test can take it back out again:
+ * these are attached to the document body, outside the wrapper that
+ * `enableAutoUnmount` cleans up.
+ */
+function mountBoundary(tag: 'input' | 'button'): [HTMLElement, HTMLElement] {
+  const boundary = document.createElement('div')
+  boundary.setAttribute('data-shortcut-boundary', '')
+  const control = document.createElement(tag)
+  boundary.appendChild(control)
+  document.body.appendChild(boundary)
+  return [boundary, control]
+}
+
 beforeEach(() => {
   resetDocument()
   selectNode(null)
@@ -389,16 +406,94 @@ describe('Workspace', () => {
     expect(activeToolId.value).toBeNull()
   })
 
-  it('leaves shortcuts alone when typing in a field', async () => {
+  it('leaves shortcuts alone when typing inside chrome', async () => {
     mount(BuilderWorkspace)
-    const input = document.createElement('input')
-    document.body.appendChild(input)
+    const [panel, input] = mountBoundary('input')
 
     input.dispatchEvent(new KeyboardEvent('keydown', { key: '1', bubbles: true }))
     await nextTick()
 
     expect(activeToolId.value).toBeNull()
-    input.remove()
+    panel.remove()
+  })
+
+  it('leaves shortcuts alone on a button inside chrome, which a tag list missed', async () => {
+    mount(BuilderWorkspace)
+    const [panel, button] = mountBoundary('button')
+
+    // The old rule matched `input, textarea, select`, so a focused toolbar
+    // button was fair game — and Backspace there would have deleted the
+    // selection. Asking "is this inside chrome?" catches it, and does not
+    // grow with every new kind of control.
+    button.dispatchEvent(new KeyboardEvent('keydown', { key: '1', bubbles: true }))
+    await nextTick()
+
+    expect(activeToolId.value).toBeNull()
+    panel.remove()
+  })
+
+  it('deletes the selected element on Delete, and on Backspace', async () => {
+    const wrapper = mount(BuilderWorkspace, { attachTo: document.body })
+    for (const key of ['Delete', 'Backspace']) {
+      const node = addNode('div', { left: 10, top: 10, width: 50, height: 50 })
+      selectNode(node.id)
+      await nextTick()
+
+      pressKey(key)
+      await nextTick()
+
+      expect(getNode(node.id), `${key} should remove the node`).toBeNull()
+      expect(selectedId.value).toBeNull()
+    }
+    expect(wrapper.findAll('.canvas-node')).toHaveLength(1)
+  })
+
+  it('deletes the whole subtree, not just the selected node', async () => {
+    mount(BuilderWorkspace, { attachTo: document.body })
+    const parent = addNode('div', { left: 10, top: 10, width: 200, height: 200 })
+    const child = addNode('div', { width: 50, height: 50 }, parent.id)
+    selectNode(parent.id)
+    await nextTick()
+
+    pressKey('Delete')
+    await nextTick()
+
+    expect(getNode(child.id)).toBeNull()
+    expect(viewport.value.childrenIds).toEqual([])
+  })
+
+  it('deletes nothing when there is no selection', async () => {
+    mount(BuilderWorkspace, { attachTo: document.body })
+    addNode('div', { left: 10, top: 10, width: 50, height: 50 })
+    selectNode(null)
+    await nextTick()
+
+    pressKey('Delete')
+    await nextTick()
+
+    expect(viewport.value.childrenIds).toHaveLength(1)
+  })
+
+  it('abandons a gesture in flight rather than writing to a deleted node', async () => {
+    const wrapper = mount(BuilderWorkspace, { attachTo: document.body })
+    const node = addNode('div', { left: 40, top: 30, width: 100, height: 60 })
+    selectNode(node.id)
+    await nextTick()
+
+    const handle = handleFor(wrapper, 'bottom-right')
+    firePointer(handle, 'pointerdown', { x: 0, y: 0 })
+    firePointer(handle, 'pointermove', { x: 60, y: 60 })
+    await nextTick()
+
+    pressKey('Delete')
+    await nextTick()
+    // The gesture would otherwise keep writing geometry to an id that no
+    // longer exists, resurrecting nothing but wasting every move.
+    firePointer(handle, 'pointermove', { x: 90, y: 90 })
+    firePointer(handle, 'pointerup', { x: 90, y: 90 })
+    await nextTick()
+
+    expect(getNode(node.id)).toBeNull()
   })
 
   it('takes focus off an inspector field when the canvas is pressed', async () => {

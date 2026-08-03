@@ -205,8 +205,11 @@ export function removeNode(id: NodeId): void {
 
   if (selectedId.value && !getNode(selectedId.value)) {
     // Land on the parent rather than nothing, so you are never stranded
-    // next to something you can no longer click.
-    selectedId.value = parent?.id ?? null
+    // next to something you can no longer click — except when that parent
+    // is the viewport, which is the document rather than an element and is
+    // deliberately not selectable by pointer. Selecting it here would be a
+    // back door into editing the canvas that nothing else offers.
+    selectedId.value = parent && !isViewport(parent.id) ? parent.id : null
   }
 }
 

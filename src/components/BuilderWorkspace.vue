@@ -4,7 +4,7 @@ import { useEventListener } from '@vueuse/core'
 
 import NodeRenderer from '@/components/NodeRenderer.vue'
 import { onResizeFrame } from '@/composables/useViewport'
-import { useToolShortcuts } from '@/composables/useToolShortcuts'
+import { useCanvasShortcuts } from '@/composables/useCanvasShortcuts'
 import { useTools } from '@/composables/useTools'
 import {
   VIEWPORT_ID,
@@ -18,7 +18,8 @@ import {
 } from '@/composables/useCanvasNodes'
 
 const { activeTool, disarm } = useTools()
-const { selectedId, selectedNode, addNode, selectNode, moveNode, updateGeometry } = useCanvasNodes()
+const { selectedId, selectedNode, addNode, removeNode, selectNode, moveNode, updateGeometry } =
+  useCanvasNodes()
 
 /**
  * The layout the receiving frame imposes.
@@ -659,9 +660,18 @@ function cancelGestures() {
   clearDrag()
 }
 
-useToolShortcuts(() => {
-  disarm()
-  cancelGestures()
+useCanvasShortcuts({
+  onEscape: () => {
+    disarm()
+    cancelGestures()
+  },
+  onDelete: () => {
+    // A gesture in flight is abandoned first: deleting the node it was
+    // transforming would otherwise leave the gesture writing geometry to
+    // an id that no longer exists.
+    cancelGestures()
+    if (selectedId.value) removeNode(selectedId.value)
+  },
 })
 </script>
 

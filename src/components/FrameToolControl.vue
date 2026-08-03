@@ -30,11 +30,12 @@ const menuOpen = ref(false)
 
 /**
  * Focusing the checked radio when the menu opens is load-bearing, not a
- * nicety. `useToolShortcuts` binds keydown to the window and skips
- * events whose target matches `input, textarea, select`. With focus
- * inside the menu, a stray digit press doesn't re-arm behind the menu's
- * back — but it also means Escape typed there never reaches the global
- * handler, so closing needs its own local handler below.
+ * nicety. `useCanvasShortcuts` binds keydown to the window and ignores
+ * anything inside a `data-shortcut-boundary`, which the toolbar panel
+ * carries. With focus inside the menu, a stray digit press doesn't re-arm
+ * behind the menu's back — but it also means Escape typed there never
+ * reaches the global handler, so closing needs its own local handler
+ * below.
  */
 watch(armed, async (isArmed) => {
   menuOpen.value = isArmed
