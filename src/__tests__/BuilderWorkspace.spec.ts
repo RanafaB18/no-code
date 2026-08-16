@@ -3,6 +3,7 @@ import { mount, type VueWrapper } from '@vue/test-utils'
 import { nextTick } from 'vue'
 
 import BuilderWorkspace from '../components/BuilderWorkspace.vue'
+import { resetView } from '../composables/useCanvasView'
 import { DEFAULT_FRAME_LAYOUT, frameLayout } from '../composables/useFrameTool'
 import { useTools } from '../composables/useTools'
 import { VIEWPORT_ID } from '../composables/useCanvasNodes'
@@ -80,6 +81,10 @@ beforeEach(() => {
   disarm()
   // Module-level singleton like the armed tool, so it leaks between tests.
   frameLayout.value = DEFAULT_FRAME_LAYOUT
+  // Every geometry assertion below assumes pan/zoom are still identity —
+  // BuilderWorkspace itself never touches them (see App.vue for why), but
+  // reset explicitly rather than relying on that by omission.
+  resetView()
 })
 
 describe('Workspace', () => {
@@ -189,7 +194,7 @@ describe('Workspace', () => {
     expect(selectedId.value).toBe(viewport.value.childrenIds[0])
   })
 
-  it('shows a selection frame with 8 handles once something is selected', async () => {
+  it('shows a selection frame with 8 handles and 4 edge strips once something is selected', async () => {
     const wrapper = mount(BuilderWorkspace, { attachTo: document.body })
 
     expect(wrapper.find('.workspace__selection').exists()).toBe(false)
@@ -199,6 +204,9 @@ describe('Workspace', () => {
 
     const selection = wrapper.get('.workspace__selection')
     expect(selection.findAll('.workspace__handle')).toHaveLength(8)
+    // One per side, so a resize can start anywhere along an edge, not
+    // only at the dot sitting on its midpoint.
+    expect(selection.findAll('.workspace__edge-strip')).toHaveLength(4)
 
     selectNode(null)
     await nextTick()
@@ -641,14 +649,55 @@ describe('Workspace', () => {
     expect(selectedId.value).toBe(node.id)
   })
 
-  it('never resizes the viewport, which is the document rather than a box in it', async () => {
+  it('resizes the viewport from a handle, like any other frame', async () => {
     const wrapper = mount(BuilderWorkspace, { attachTo: document.body })
     selectNode(VIEWPORT_ID)
     await nextTick()
 
     await drag(handleFor(wrapper, 'bottom-right'), { x: 0, y: 0 }, { x: 200, y: 200 })
 
-    expect(getNode(VIEWPORT_ID)).toMatchObject({ width: 1440, height: 1024 })
+    expect(getNode(VIEWPORT_ID)).toMatchObject({ width: 1640, height: 1224 })
+  })
+
+  it('resizes the viewport from its top-left edge, anchoring the far corner like any frame', async () => {
+    const wrapper = mount(BuilderWorkspace, { attachTo: document.body })
+    selectNode(VIEWPORT_ID)
+    await nextTick()
+
+    await drag(handleFor(wrapper, 'top-left'), { x: 0, y: 0 }, { x: 40, y: 30 })
+
+    // It positions itself now the same as any other frame, so shrinking
+    // from the top-left moves the origin to hold the opposite corner —
+    // the bottom-right stays at (1440, 1024).
+    expect(getNode(VIEWPORT_ID)).toMatchObject({ left: 40, top: 30, width: 1400, height: 994 })
+  })
+
+  it('moves the viewport by dragging it once it is already selected', async () => {
+    const wrapper = mount(BuilderWorkspace, { attachTo: document.body })
+    selectNode(VIEWPORT_ID)
+    await nextTick()
+
+    // Pressing its own body, not a handle — the viewport fills the
+    // surface, so this targets it directly.
+    await drag(nodeFor(wrapper, VIEWPORT_ID), { x: 500, y: 500 }, { x: 540, y: 560 })
+
+    expect(getNode(VIEWPORT_ID)).toMatchObject({ left: 40, top: 60 })
+  })
+
+  it('does not move the viewport by pressing it when it is not already selected', async () => {
+    const wrapper = mount(BuilderWorkspace, { attachTo: document.body })
+    selectNode(null)
+    await nextTick()
+
+    // Pressing it cold is pressing empty canvas: it clears whatever was
+    // selected rather than picking the viewport up to drag it.
+    selectNode(addNode('div').id)
+    await nextTick()
+
+    await drag(nodeFor(wrapper, VIEWPORT_ID), { x: 500, y: 500 }, { x: 540, y: 560 })
+
+    expect(getNode(VIEWPORT_ID)).toMatchObject({ left: 0, top: 0 })
+    expect(selectedId.value).toBeNull()
   })
 
   it('restores the geometry a cancelled resize had already written', async () => {

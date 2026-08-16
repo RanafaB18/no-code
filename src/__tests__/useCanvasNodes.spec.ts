@@ -132,11 +132,19 @@ describe('useCanvasNodes', () => {
       expect(resolvedPosition(pinned)).toBe('absolute')
     })
 
-    it('is never static, and the viewport is always relative', () => {
+    it('is never static', () => {
       const child = addNode('div')
 
-      expect(resolvedPosition(viewport.value)).toBe('relative')
+      expect(['absolute', 'relative']).toContain(resolvedPosition(viewport.value))
       expect(['absolute', 'relative']).toContain(resolvedPosition(child))
+    })
+
+    it('is absolute for the viewport, which has no parent to impose a layout', () => {
+      // The same rule an ordinary `layout: 'none'` frame gives its own
+      // children, extended to the one node with no parent at all —
+      // `.workspace__canvas` is a real containing block for it, the same
+      // as any `layout: 'none'` frame is for what it holds.
+      expect(resolvedPosition(viewport.value)).toBe('absolute')
     })
   })
 

@@ -10,6 +10,7 @@ import {
   openBuilder,
   rectOf,
   rootChildren,
+  zoomTo,
 } from './canvas'
 
 /** How far outside an element its selection frame — and so its grips — sits. */
@@ -67,6 +68,33 @@ test.describe('Move and resize', () => {
       y: before.y,
       width: before.width + 60,
       height: before.height + 40,
+    })
+  })
+
+  test('resizing from anywhere along an edge, not just its midpoint dot', async ({ page }) => {
+    const viewport = await rectOf(page.locator(VIEWPORT))
+    await drawFrame(page, { x: viewport.x + 200, y: viewport.y + 200 }, { width: 200, height: 150 })
+
+    const frame = rootChildren(page).first()
+    const before = await rectOf(frame)
+
+    // A quarter of the way down the right edge — clear of the corner
+    // dots above and below it, and clear of the midpoint dot too, so
+    // this can only be landing on the strip between them.
+    await dragBy(
+      page,
+      { x: before.x + before.width + SELECTION_GAP, y: before.y + before.height * 0.25 },
+      50,
+      0,
+    )
+
+    // A single-edge resize, exactly like the midpoint dot gives: only
+    // the width changed.
+    expectBox(await rectOf(frame), {
+      x: before.x,
+      y: before.y,
+      width: before.width + 50,
+      height: before.height,
     })
   })
 
@@ -167,5 +195,70 @@ test.describe('Move and resize', () => {
     await page.mouse.up()
 
     expectBox(await rectOf(frame), before)
+  })
+
+  test('the viewport is selected from its label and resizes like any frame', async ({ page }) => {
+    await page.locator('.workspace__viewport-bar').click()
+
+    // Full-size at 100%, the viewport's own corners sit under the docked
+    // panels — the inspector specifically, once it is tall enough to show
+    // what a selected viewport offers. Zoomed out, `zoomTo` already
+    // re-centres it clear of everything docked around the window's edges.
+    await zoomTo(page, 0.5)
+    const before = await rectOf(page.locator(VIEWPORT))
+    await expect(page.locator('#field-width')).toHaveValue('1440')
+
+    await dragBy(
+      page,
+      { x: before.x + before.width + SELECTION_GAP, y: before.y + before.height + SELECTION_GAP },
+      100,
+      80,
+    )
+
+    // The screen delta was halved back to canvas units by the 50% zoom.
+    expectBox(await rectOf(page.locator(VIEWPORT)), {
+      x: before.x,
+      y: before.y,
+      width: before.width + 100,
+      height: before.height + 80,
+    })
+    // A 100/80 real-pixel drag at 50% zoom is 200/160 canvas units.
+    await expect(page.locator('#field-width')).toHaveValue('1640')
+    await expect(page.locator('#field-height')).toHaveValue('1184')
+  })
+
+  test('the viewport moves by dragging it once selected, from its label onward', async ({
+    page,
+  }) => {
+    const before = await rectOf(page.locator(VIEWPORT))
+    await page.locator('.workspace__viewport-bar').click()
+
+    // Empty canvas within the frame, well clear of the label itself.
+    await dragBy(page, { x: before.x + before.width / 2, y: before.y + before.height / 2 }, 60, 90)
+
+    expectBox(await rectOf(page.locator(VIEWPORT)), {
+      x: before.x + 60,
+      y: before.y + 90,
+      width: before.width,
+      height: before.height,
+    })
+    await expect(page.locator('#field-left')).toHaveValue('60')
+    await expect(page.locator('#field-top')).toHaveValue('90')
+  })
+
+  test('pressing the viewport cold clears the selection rather than moving it', async ({
+    page,
+  }) => {
+    const viewport = await rectOf(page.locator(VIEWPORT))
+    await drawFrame(page, { x: viewport.x + 100, y: viewport.y + 100 }, { width: 80, height: 80 })
+    expect(await page.locator('.workspace__selection').count()).toBe(1)
+
+    // Bare canvas, not the frame just drawn and not the label — this is
+    // exactly the gesture that reads as "pressing empty canvas" for every
+    // other press, and the viewport is reachable only from its label.
+    await dragBy(page, { x: viewport.x + 500, y: viewport.y + 500 }, 60, 90)
+
+    expect(await page.locator('.workspace__selection').count()).toBe(0)
+    expectBox(await rectOf(page.locator(VIEWPORT)), viewport)
   })
 })

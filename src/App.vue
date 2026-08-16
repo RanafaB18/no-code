@@ -1,8 +1,30 @@
 <script setup lang="ts">
+import { onMounted } from 'vue'
+
 import BuilderToolbar from '@/components/BuilderToolbar.vue'
 import BuilderWorkspace from '@/components/BuilderWorkspace.vue'
+import CanvasZoomControls from '@/components/CanvasZoomControls.vue'
 import StyleInspector from '@/components/StyleInspector.vue'
 import ThemeToggle from '@/components/ThemeToggle.vue'
+import { fitToDocument } from '@/composables/useCanvasView'
+import { viewportHeight, viewportWidth } from '@/composables/useViewport'
+
+/**
+ * Centres the design once, when the app first loads — the entire point of
+ * moving to an infinite canvas rather than a page pinned to a corner.
+ *
+ * Lives here rather than in `BuilderWorkspace.vue`'s own mount: the real
+ * app mounts the workspace exactly once, so the two are equivalent in
+ * production, but `BuilderWorkspace.spec.ts` mounts it fresh dozens of
+ * times as an isolated unit and asserts exact geometry from raw pointer
+ * coordinates — coordinates that assume `pan`/`zoom` are still identity.
+ * Keeping this app-level, where no test asserts canvas coordinates,
+ * avoids re-fitting (and re-breaking that assumption) on every one of
+ * those mounts.
+ */
+onMounted(() => {
+  fitToDocument({ width: viewportWidth.value, height: viewportHeight.value })
+})
 </script>
 
 <template>
@@ -13,6 +35,8 @@ import ThemeToggle from '@/components/ThemeToggle.vue'
          workspace keeps its full width — no space is reserved for them. -->
     <BuilderToolbar />
     <StyleInspector />
+
+    <CanvasZoomControls />
 
     <div class="theme-toggle-wrapper">
       <ThemeToggle />

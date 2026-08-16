@@ -37,6 +37,58 @@ export function expectBox(
 export async function openBuilder(page: Page) {
   await page.goto('/')
   await page.locator(VIEWPORT).waitFor()
+
+  // The app centres and fits the design to the window on load, which is
+  // deliberately *not* 100% whenever the window has room to spare — so a
+  // fresh load does not, in general, put the canvas at zoom 1. Nearly
+  // every test here was written against real pixels standing in directly
+  // for canvas ones, which only holds at zoom 1, so tests get a
+  // deterministic baseline by default. A test that wants to exercise zoom
+  // itself does so explicitly — see `zoomTo`.
+  await page.getByLabel('Reset zoom').click()
+}
+
+/**
+ * Sets the canvas to exactly `factor` (0.5, 2, 4, ...), for a test that
+ * needs a real, non-1 zoom rather than the baseline `openBuilder` resets
+ * to.
+ *
+ * Goes through the zoom-in/out buttons rather than a wheel event: those
+ * step by a clean 2× each press (see CanvasZoomControls.vue), so a whole
+ * number of presses lands on an exact power of two with no float drift to
+ * account for in an assertion.
+ *
+ * The buttons anchor on the *window's* centre, not the design's — after
+ * `openBuilder`'s reset put the canvas at the window's corner rather than
+ * its middle, repeated zooming can walk the design toward an edge, or off
+ * it, before a test ever gets to draw on it. Panning it back to a fixed,
+ * known point afterwards is what makes the zoom level the only thing a
+ * test using this actually has to account for.
+ *
+ * That correction is a plain wheel pan, not a drag: the distance involved
+ * can exceed what fits inside the window (a design shifted mostly
+ * off-screen needs a correction bigger than the window itself), and a
+ * wheel event pans without the pointer having to physically travel that
+ * far the way `panBy`'s drag would need to.
+ */
+export async function zoomTo(page: Page, factor: number) {
+  const steps = Math.round(Math.log2(factor))
+  const button = page.getByLabel(steps >= 0 ? 'Zoom in' : 'Zoom out')
+  for (let i = 0; i < Math.abs(steps); i += 1) {
+    await button.click()
+  }
+
+  const target = { x: 100, y: 100 }
+  const viewport = await rectOf(page.locator(VIEWPORT))
+  await page.mouse.move(800, 600)
+  await page.mouse.wheel(viewport.x - target.x, viewport.y - target.y)
+
+  // The selection frame re-measures on a throttled watcher (see
+  // BuilderWorkspace.vue), so a handle can still be reporting its
+  // pre-pan position for a moment after this resolves. Two zoom changes
+  // land in quick succession above, which is exactly the case that
+  // throttling defers to its trailing edge rather than firing at once.
+  await page.waitForTimeout(50)
 }
 
 /** The real, laid-out box — the whole reason these tests exist. */
@@ -94,6 +146,16 @@ export async function dragBy(page: Page, from: { x: number; y: number }, dx: num
   await page.mouse.down()
   await page.mouse.move(from.x + dx, from.y + dy, { steps: 8 })
   await page.mouse.up()
+}
+
+/** Pans the canvas by a delta — space-drag, the same gesture a user makes. */
+export async function panBy(page: Page, from: { x: number; y: number }, dx: number, dy: number) {
+  await page.keyboard.down('Space')
+  await page.mouse.move(from.x, from.y)
+  await page.mouse.down()
+  await page.mouse.move(from.x + dx, from.y + dy, { steps: 8 })
+  await page.mouse.up()
+  await page.keyboard.up('Space')
 }
 
 /** Selects a node by pressing it — a press with no drag never moves it. */

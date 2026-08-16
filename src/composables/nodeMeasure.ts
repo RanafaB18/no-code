@@ -1,4 +1,5 @@
 import { getNode, type NodeId } from './useCanvasNodes'
+import { zoom } from './useCanvasView'
 
 /** A box, in whatever space the caller rebased it onto. */
 export interface Rect {
@@ -56,11 +57,37 @@ export function toLocal(box: Rect, container: HTMLElement | null): Rect {
 }
 
 /**
- * A node's box in **parent-local** pixels — the same space its pins live
- * in, so a measurement can stand in for a pin the node does not carry.
+ * Like `toLocal`, but the answer is in **canvas** pixels rather than
+ * whatever screen size the box currently renders at.
+ *
+ * Not simply `toLocal`'s result divided by zoom afterwards.
+ * `container.clientLeft`/`clientTop` (its own border width) are reported
+ * in canvas units regardless of zoom — a CSS transform changes how an
+ * element paints, never its own layout geometry — while `box` and the
+ * container's `getBoundingClientRect()` are in screen units. Dividing the
+ * whole difference by zoom would divide the already-canvas-unit border
+ * width too, which only shows up once zoom is not 1: the screen part has
+ * to be converted *before* the border is subtracted, not after.
+ */
+export function toCanvasLocal(box: Rect, container: HTMLElement): Rect {
+  const z = zoom.value
+  const origin = container.getBoundingClientRect()
+  return {
+    left: (box.left - origin.left) / z - container.clientLeft,
+    top: (box.top - origin.top) / z - container.clientTop,
+    width: box.width / z,
+    height: box.height / z,
+  }
+}
+
+/**
+ * A node's box in **parent-local canvas** pixels — the same space its
+ * pins live in, so a measurement can stand in for a pin the node does not
+ * carry.
  */
 export function measureNodeRect(id: NodeId): Rect | null {
   const element = nodeElement(id)
-  if (!element) return null
-  return toLocal(element.getBoundingClientRect(), nodeElement(getNode(id)?.parentId))
+  const parent = nodeElement(getNode(id)?.parentId)
+  if (!element || !parent) return null
+  return toCanvasLocal(element.getBoundingClientRect(), parent)
 }

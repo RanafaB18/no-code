@@ -114,10 +114,10 @@ export interface CanvasNode extends NodeGeometry {
   styles: Record<string, string>
 }
 
-/** The one node every document has, and the origin of all coordinates. */
+/** The one node every document has — the page being designed. */
 export const VIEWPORT_ID = 'viewport'
 
-/** Fixed canvas size — the "page" being designed, not the window. */
+/** The canvas size a fresh viewport starts at, not a permanent one — it resizes like any frame. */
 export const VIEWPORT_WIDTH = 1440
 export const VIEWPORT_HEIGHT = 1024
 
@@ -131,9 +131,11 @@ export function isViewport(id: NodeId | null | undefined): boolean {
  * Built per call rather than shared, so a reset can never hand back an
  * object a previous document already mutated.
  *
- * It is the coordinate origin, so it is never `absolute` — there is
- * nothing above it to position against — and has no parent to impose a
- * layout on it.
+ * The coordinate *origin* belongs to the infinite canvas itself now (see
+ * `useCanvasView.ts`), not to the viewport — it is just the one frame
+ * that starts sitting at that origin, seeded with `left`/`top` explicitly
+ * rather than leaning on position: absolute's static-position fallback,
+ * so there is a real value to drag from the first time it moves.
  */
 export function createViewport(): CanvasNode {
   return {
@@ -141,6 +143,8 @@ export function createViewport(): CanvasNode {
     type: 'div',
     parentId: null,
     childrenIds: [],
+    left: 0,
+    top: 0,
     width: VIEWPORT_WIDTH,
     height: VIEWPORT_HEIGHT,
     widthMode: DEFAULT_SIZE_MODE,
@@ -175,16 +179,21 @@ export function getNode(id: NodeId | null | undefined): CanvasNode | null {
  * The single rule every consumer asks — drawing, dragging, the selection
  * overlay and export all branch on this rather than re-deriving it. A
  * node is absolute when explicitly pinned, or when its parent imposes no
- * layout to place it.
+ * layout to place it — which now includes the viewport itself: it has no
+ * parent, and "no parent to impose a layout" is exactly the condition
+ * every other parentless-in-spirit case already resolves to `absolute`
+ * for. `.workspace__canvas` is a real containing block for it to
+ * position against, the same as any `layout: 'none'` frame is for its
+ * own children.
  *
  * Never `static`: a static frame is invisible to the containing-block
  * search, so any absolute child of it would escape and position against
  * a distant ancestor instead.
  */
 export function resolvedPosition(node: CanvasNode): 'absolute' | 'relative' {
-  if (isViewport(node.id)) return 'relative'
   if (node.position === 'absolute') return 'absolute'
-  return getNode(node.parentId)?.layout === 'none' ? 'absolute' : 'relative'
+  const parent = getNode(node.parentId)
+  return !parent || parent.layout === 'none' ? 'absolute' : 'relative'
 }
 
 export interface NodeInit extends NodeGeometry {

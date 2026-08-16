@@ -3,12 +3,30 @@ import { computed, ref, useTemplateRef, watch } from 'vue'
 import { useEventListener } from '@vueuse/core'
 
 import NodeRenderer from '@/components/NodeRenderer.vue'
-import { measureNodeRect, nodeElement, toLocal, type Rect } from '@/composables/nodeMeasure'
+import {
+  measureNodeRect,
+  nodeElement,
+  toCanvasLocal,
+  toLocal,
+  type Rect,
+} from '@/composables/nodeMeasure'
+import {
+  canvasTransform,
+  pan,
+  panBy,
+  toCanvasDelta,
+  toCanvasPoint,
+  zoom,
+  zoomBy,
+  type ViewPoint,
+} from '@/composables/useCanvasView'
 import { onResizeFrame } from '@/composables/useViewport'
-import { useCanvasShortcuts } from '@/composables/useCanvasShortcuts'
+import { SHORTCUT_BOUNDARY, useCanvasShortcuts } from '@/composables/useCanvasShortcuts'
 import { useTools } from '@/composables/useTools'
 import {
+  VIEWPORT_HEIGHT,
   VIEWPORT_ID,
+  VIEWPORT_WIDTH,
   aspectRatioOf,
   getNode,
   isViewport,
@@ -42,6 +60,72 @@ const {
  * size survives.
  */
 const dropTargetLayout = computed(() => getNode(dropTargetId.value)?.layout ?? 'none')
+
+/**
+ * The viewport's own screen box.
+ *
+ * Computed directly from `pan`/`zoom` and the node's own stored geometry
+ * rather than measured, unlike every other overlay here: there is nothing
+ * a DOM read could tell this that the view state and the node do not
+ * already say between them, and it means the label tracks a move or a
+ * resize with no watcher of its own to keep in sync.
+ */
+const viewportScreenRect = computed(() => {
+  const node = getNode(VIEWPORT_ID)
+  return {
+    left: pan.value.x + (node?.left ?? 0) * zoom.value,
+    top: pan.value.y + (node?.top ?? 0) * zoom.value,
+    width: (node?.width ?? VIEWPORT_WIDTH) * zoom.value,
+    height: (node?.height ?? VIEWPORT_HEIGHT) * zoom.value,
+  }
+})
+
+const viewportLabel = computed(() => {
+  const node = getNode(VIEWPORT_ID)
+  return `Page · ${node?.width ?? VIEWPORT_WIDTH} × ${node?.height ?? VIEWPORT_HEIGHT}`
+})
+
+/** The bar's own height — fixed screen chrome, never scaled by zoom. */
+const VIEWPORT_BAR_HEIGHT = 28
+
+/**
+ * Clear space between the bar and the frame's top edge.
+ *
+ * The bar reads as a tab belonging to the frame rather than part of its
+ * content, which is what the separation buys: flush against the edge, it
+ * looked like a header *inside* the page being designed. Screen pixels,
+ * not canvas ones, so the separation stays visually constant at every
+ * zoom rather than collapsing to nothing when zoomed out.
+ */
+const VIEWPORT_BAR_GAP = 8
+
+/**
+ * The whole bar — its height plus the gap under it — is what has to fit
+ * above the frame for it to sit there.
+ */
+const VIEWPORT_BAR_OFFSET = VIEWPORT_BAR_HEIGHT + VIEWPORT_BAR_GAP
+
+/**
+ * Floated above the frame whenever there is room, and tucked just inside
+ * its top edge when there is not.
+ *
+ * The fallback matters more than it looks: "room above" is relative to
+ * wherever the design happens to sit, and `fitToDocument` centres it
+ * against the window's own top on load — so a frame with no space above
+ * it is the *default* state, not an edge case. Without the fallback the
+ * bar would spend that whole time clipped off the top of the window,
+ * taking the only way to select the viewport with it.
+ */
+const viewportBarStyle = computed(() => {
+  const rect = viewportScreenRect.value
+  const hasRoomAbove = rect.top >= VIEWPORT_BAR_OFFSET
+  return {
+    left: `${rect.left}px`,
+    top: `${hasRoomAbove ? rect.top - VIEWPORT_BAR_OFFSET : rect.top + VIEWPORT_BAR_GAP}px`,
+    width: `${rect.width}px`,
+    height: `${VIEWPORT_BAR_HEIGHT}px`,
+  }
+})
 
 const workspace = useTemplateRef<HTMLElement>('workspace')
 
@@ -120,19 +204,6 @@ function resolveDropTarget(event: PointerEvent): HTMLElement | null {
   return target.closest<HTMLElement>('[data-node-id]')
 }
 
-/**
- * The node to select, or null to clear.
- *
- * Split from the drop target because the two want different fallbacks now
- * that the viewport fills the surface: it is a legitimate *parent* to draw
- * into, but pressing it is pressing empty canvas, so it is deliberately
- * not pointer-selectable. It is reachable from its own control instead.
- */
-function resolveSelectionTarget(event: PointerEvent): string | null {
-  const id = resolveDropTarget(event)?.dataset.nodeId ?? null
-  return isViewport(id) ? null : id
-}
-
 // Re-measure whenever the selection changes, or anything about the
 // selected node does. Deliberately the whole node rather than its
 // `styles` alone: geometry, layout and position are first-class fields
@@ -152,6 +223,18 @@ watch([selectedId, selectedNode], measureSelection, {
 // own styles changing. Throttled — this reads four layout properties, and
 // resize fires continuously while a window edge is dragged.
 useEventListener(window, 'resize', onResizeFrame(measureSelection))
+
+// Panning or zooming moves every node's on-screen box without moving the
+// node itself — `measureSelection` reads real rendered pixels, so without
+// this the frame and its handles would stay frozen at wherever they were
+// before the view last changed. Throttled for the same reason as resize:
+// `pan` writes on every pointermove of a pan gesture.
+//
+// flush: 'post', for the same reason as the selection watcher above: a
+// 'pre' watcher runs before `.workspace__canvas`'s own `:style` binding
+// has been patched into the DOM, so it would measure the transform that
+// is about to be replaced, not the one just written.
+watch(canvasTransform, onResizeFrame(measureSelection), { flush: 'post' })
 
 /** The sides of a box a gesture can drag. */
 type Edge = 'top' | 'right' | 'bottom' | 'left'
@@ -214,6 +297,99 @@ const SELECTION_HANDLES = [
   { name: 'left', x: '0%', y: '50%', corner: false, cursor: 'ew-resize', edges: ['left'] },
 ] as const satisfies readonly SelectionHandle[]
 
+interface EdgeStrip {
+  edge: Edge
+  cursor: string
+}
+
+/**
+ * A wide hit strip running the full length of each side, so grabbing a
+ * resize is not confined to the four small dots at each edge's midpoint.
+ *
+ * Deliberately separate elements from `SELECTION_HANDLES` rather than
+ * stretching those: a corner must stay a small, precise target for its
+ * own diagonal resize, so each strip has to stop short of the corners —
+ * simplest as its own element sized independently, not as a variant of a
+ * dot that already means something else at 0%/100%.
+ */
+const EDGE_STRIPS = [
+  { edge: 'top', cursor: 'ns-resize' },
+  { edge: 'right', cursor: 'ew-resize' },
+  { edge: 'bottom', cursor: 'ns-resize' },
+  { edge: 'left', cursor: 'ew-resize' },
+] as const satisfies readonly EdgeStrip[]
+
+/**
+ * Held to pan by dragging, the way space-drag works in every other canvas
+ * tool. Tracked on `window`, not the workspace, so releasing it outside
+ * the canvas (over a panel, say) still lands — a stuck-down space would
+ * otherwise turn every later click into a pan.
+ */
+const spaceHeld = ref(false)
+
+/** Only for the cursor: `panGesture` below is a plain, non-reactive `let`. */
+const isPanning = ref(false)
+
+function insideChrome(event: Event): boolean {
+  return event.target instanceof Element && event.target.closest(`[${SHORTCUT_BOUNDARY}]`) !== null
+}
+
+function handleSpaceDown(event: KeyboardEvent) {
+  // A space typed into a field is text, not a request to pan — same
+  // boundary the tool shortcuts respect.
+  if (event.code !== 'Space' || insideChrome(event)) return
+  event.preventDefault()
+  spaceHeld.value = true
+}
+
+function handleSpaceUp(event: KeyboardEvent) {
+  if (event.code === 'Space') spaceHeld.value = false
+}
+
+useEventListener(window, 'keydown', handleSpaceDown)
+useEventListener(window, 'keyup', handleSpaceUp)
+
+/** A pan drag in progress — mirrors `transform`'s non-reactive posture. */
+let panGesture: { origin: ViewPoint; startPan: ViewPoint } | null = null
+
+function beginPan(event: PointerEvent) {
+  panGesture = { origin: { x: event.clientX, y: event.clientY }, startPan: { ...pan.value } }
+  isPanning.value = true
+  capturePointer(event.pointerId)
+}
+
+function applyPan(event: PointerEvent) {
+  if (!panGesture) return
+  pan.value = {
+    x: panGesture.startPan.x + (event.clientX - panGesture.origin.x),
+    y: panGesture.startPan.y + (event.clientY - panGesture.origin.y),
+  }
+}
+
+function endPan(event: PointerEvent) {
+  panGesture = null
+  isPanning.value = false
+  releasePointer(event.pointerId)
+}
+
+/** A wheel notch's worth of zoom change, tuned so a few notches feel like a step. */
+const ZOOM_WHEEL_SENSITIVITY = 0.01
+
+function handleWheel(event: WheelEvent) {
+  event.preventDefault()
+  const anchor = { x: event.clientX, y: event.clientY }
+
+  if (event.ctrlKey) {
+    // Trackpad pinch is reported as a wheel event with `ctrlKey` set —
+    // there is no separate pinch event on the web, and this is the
+    // convention every other web canvas (Figma, Google Maps) reads it by.
+    zoomBy(Math.exp(-event.deltaY * ZOOM_WHEEL_SENSITIVITY), anchor)
+    return
+  }
+
+  panBy(-event.deltaX, -event.deltaY)
+}
+
 /**
  * Below this, a drag is treated as a stray click rather than an intent
  * to draw — without it, an ordinary click (a 0x0 drag) would litter the
@@ -242,18 +418,37 @@ const dragRect = computed(() => {
 })
 
 /**
- * The drawn rectangle expressed **relative to the frame receiving it**.
+ * The drawn rectangle expressed **relative to the frame receiving it**, in
+ * canvas pixels.
  *
  * Absolute offsets resolve against the containing block, which is the
- * target frame — so the viewport-space pointer coordinates have to be
+ * target frame — so the window-space pointer coordinates have to be
  * rebased onto it, or every nested node would be positioned as though it
- * sat at the page origin.
+ * sat at the page origin. `dragRect` is real window pixels either way
+ * (both corners came straight from `event.clientX/clientY`), so the
+ * result needs converting to canvas units regardless of which branch
+ * below runs — only *what it is rebased onto* differs.
  */
 function geometryFor(target: HTMLElement | null) {
   const rect = dragRect.value
   if (!rect) return null
 
-  const local = toLocal(rect, target)
+  // No frame under the drag: it lands directly on the canvas, so the rect
+  // is rebased onto the canvas's own origin instead of a node's — there is
+  // no element here for `toCanvasLocal` to measure against.
+  let local: Rect
+  if (target) {
+    local = toCanvasLocal(rect, target)
+  } else {
+    const origin = toCanvasPoint({ x: rect.left, y: rect.top })
+    local = {
+      left: origin.x,
+      top: origin.y,
+      width: rect.width / zoom.value,
+      height: rect.height / zoom.value,
+    }
+  }
+
   return {
     left: Math.round(local.left),
     top: Math.round(local.top),
@@ -413,9 +608,7 @@ function startSize(node: CanvasNode, measured: Rect | null, axis: SizeAxis) {
  */
 function beginTransform(event: PointerEvent, nodeId: NodeId, edges: readonly Edge[]) {
   const node = getNode(nodeId)
-  // The viewport is the document, not a box within it: it has nothing to
-  // position against and no parent to reorder it among.
-  if (!node || isViewport(nodeId)) return
+  if (!node) return
 
   const measured = measureNodeRect(nodeId)
   const released = edges.filter((edge) => node[OPPOSITE_EDGE[edge]] !== undefined)
@@ -552,9 +745,15 @@ function applyTransform(event: PointerEvent) {
   const dy = event.clientY - active.origin.y
 
   // Same threshold as drawing: without it, the press that selects an
-  // element would nudge it by whatever jitter the pointer had.
+  // element would nudge it by whatever jitter the pointer had. Compared in
+  // window pixels, not canvas ones — a stray flick of the hand is the same
+  // stray flick regardless of zoom, which the resulting size is not.
   if (!active.moved && Math.abs(dx) < MIN_DRAG && Math.abs(dy) < MIN_DRAG) return
   active.moved = true
+
+  // Only now converted: `start`, and everything `resizeGeometry` and the
+  // move branch below add it to, are canvas units — dx/dy have to match.
+  const canvasDelta = toCanvasDelta({ x: dx, y: dy })
 
   if (active.edges.length > 0) {
     // Dragging an edge states a size in pixels, so an axis that was
@@ -565,7 +764,7 @@ function applyTransform(event: PointerEvent) {
         updateSizeMode(active.nodeId, axis, 'fixed')
       }
     }
-    updateGeometry(active.nodeId, resizeGeometry(active, dx, dy))
+    updateGeometry(active.nodeId, resizeGeometry(active, canvasDelta.x, canvasDelta.y))
     return
   }
 
@@ -574,7 +773,10 @@ function applyTransform(event: PointerEvent) {
   // it among its siblings — which is settled on release, from where the
   // pointer finally landed.
   if (active.absolute) {
-    updateGeometry(active.nodeId, { left: active.start.left + dx, top: active.start.top + dy })
+    updateGeometry(active.nodeId, {
+      left: active.start.left + canvasDelta.x,
+      top: active.start.top + canvasDelta.y,
+    })
   }
 }
 
@@ -602,7 +804,8 @@ function cancelTransform() {
   }
 }
 
-function handleHandleDown(event: PointerEvent, handle: SelectionHandle) {
+/** Shared by the corner/edge dots and the edge strips — both just start a resize. */
+function handleResizeDown(event: PointerEvent, edges: readonly Edge[]) {
   const id = selectedId.value
   if (!id) return
 
@@ -612,7 +815,7 @@ function handleHandleDown(event: PointerEvent, handle: SelectionHandle) {
   event.stopPropagation()
   event.preventDefault()
 
-  beginTransform(event, id, handle.edges)
+  beginTransform(event, id, edges)
 }
 
 function handlePointerDown(event: PointerEvent) {
@@ -622,6 +825,14 @@ function handlePointerDown(event: PointerEvent) {
   // stays wherever it was: type in an inspector field, click the canvas,
   // and every tool shortcut would still be swallowed by that field.
   workspace.value?.focus()
+
+  // Space-drag panning pre-empts drawing and selection both — it is a
+  // navigation gesture, not one that acts on canvas content.
+  if (spaceHeld.value) {
+    event.preventDefault()
+    beginPan(event)
+    return
+  }
 
   if (!activeTool.value) {
     // Idle mode: selection is delegated here rather than bound per
@@ -635,7 +846,22 @@ function handlePointerDown(event: PointerEvent) {
     // click-based selector would immediately re-select the frame just
     // drawn into and discard the new element's selection. jsdom never
     // synthesises that click, so no test would have caught it.
-    const id = resolveSelectionTarget(event)
+    const target = resolveDropTarget(event)
+    const targetId = target?.dataset.nodeId ?? null
+
+    // A press on the viewport's own empty area — not on any child, which
+    // `closest` would already have found first — drags it, but only once
+    // it is already the selection. Pressing it cold still reads as
+    // pressing bare canvas: it is reachable only from its own label, so a
+    // stray click never grabs the whole document by accident the way it
+    // would if this fell under the ordinary select-and-move rule below.
+    if (isViewport(targetId) && selectedId.value === VIEWPORT_ID) {
+      event.preventDefault()
+      beginTransform(event, VIEWPORT_ID, [])
+      return
+    }
+
+    const id = isViewport(targetId) ? null : targetId
     selectNode(id)
 
     // Selecting and moving are one gesture: press picks the element up,
@@ -666,6 +892,11 @@ function handlePointerDown(event: PointerEvent) {
 }
 
 function handlePointerMove(event: PointerEvent) {
+  if (panGesture) {
+    applyPan(event)
+    return
+  }
+
   if (transform) {
     applyTransform(event)
     return
@@ -676,6 +907,11 @@ function handlePointerMove(event: PointerEvent) {
 }
 
 function handlePointerUp(event: PointerEvent) {
+  if (panGesture) {
+    endPan(event)
+    return
+  }
+
   if (transform) {
     finishTransform(event)
     releasePointer(event.pointerId)
@@ -683,9 +919,14 @@ function handlePointerUp(event: PointerEvent) {
   }
 
   const tool = activeTool.value
+  const drawn = dragRect.value
   const geometry = geometryFor(dropTargetNode.value)
 
-  if (tool && geometry && geometry.width >= MIN_DRAG && geometry.height >= MIN_DRAG) {
+  // Gated on the drag as the pointer actually made it — window pixels —
+  // not on `geometry`, which is canvas pixels: at any zoom other than
+  // 100% the two disagree on how big a "stray click" is allowed to be,
+  // and it is the hand's jitter this threshold exists to forgive.
+  if (tool && drawn && geometry && drawn.width >= MIN_DRAG && drawn.height >= MIN_DRAG) {
     // A frame that imposes a layout places its own children, so the drawn
     // offsets would be inert — only the size survives. Emitting left/top
     // there would put values in the inspector the browser ignores.
@@ -711,6 +952,8 @@ function handlePointerUp(event: PointerEvent) {
 function cancelGestures() {
   cancelTransform()
   clearDrag()
+  panGesture = null
+  isPanning.value = false
 }
 
 useCanvasShortcuts({
@@ -732,47 +975,96 @@ useCanvasShortcuts({
   <div
     ref="workspace"
     class="workspace"
-    :class="{ 'workspace--armed': activeTool !== null }"
+    :class="{
+      'workspace--armed': activeTool !== null,
+      'workspace--pan-ready': spaceHeld,
+      'workspace--panning': isPanning,
+    }"
     tabindex="-1"
     @pointerdown="handlePointerDown"
     @pointermove="handlePointerMove"
     @pointerup="handlePointerUp"
     @pointercancel="cancelGestures"
+    @wheel="handleWheel"
     @dragstart.prevent
     @selectstart.prevent
   >
-    <!-- No @click here: selection is delegated to the root handler so the
-         innermost element wins, and so this stays a single-prop component
-         that can skip re-rendering. -->
-    <!-- One root: the viewport. Everything else descends from it, so
-         there is no "no parent" case anywhere downstream. -->
-    <NodeRenderer :node-id="VIEWPORT_ID" />
+    <!--
+      Everything that is actually on the canvas lives inside this layer,
+      which carries the one CSS transform that turns pan and zoom into
+      what is on screen. `transform-origin: 0 0` in the stylesheet below
+      is load-bearing: it is what makes `pan` mean "where canvas (0, 0)
+      renders" rather than some other point on the layer — see
+      `useCanvasView.ts`.
+
+      Overlays (drop-target, selection) stay OUTSIDE this layer, in real
+      screen pixels — see measureRect below for why that needs no extra
+      work under zoom.
+    -->
+    <div class="workspace__canvas" :style="{ transform: canvasTransform }">
+      <!-- No @click here: selection is delegated to the root handler so
+           the innermost element wins, and so this stays a single-prop
+           component that can skip re-rendering. -->
+      <!-- One root: the viewport. Everything else descends from it, so
+           there is no "no parent" case anywhere downstream. -->
+      <NodeRenderer :node-id="VIEWPORT_ID" />
+
+      <!--
+        The ghost renders as the target's last child — exactly where the
+        real element will be appended — so the preview is laid out by that
+        frame's own flex/grid rules and lands where it appears to.
+
+        Teleport rather than passing the target down the tree: the ghost
+        stays part of this component's render and is merely *placed*
+        elsewhere in the DOM, so the target element's render function is
+        never invoked. Prop-drilling a ghost target would re-render every
+        element on every frame of every drag.
+
+        The element is passed, not a selector string — a selector resolves
+        via document.querySelector and would need the workspace attached to
+        the document.
+
+        This is a deliberate, narrow exception to the rule that keeps the
+        selection frame out of authored content: the ghost has to
+        participate in layout to preview it at all, it is transient, and it
+        lives outside the `elements` tree, so an export walking that tree
+        can never see it. Do not "fix" it into a sibling.
+
+        The un-teleported fallback (no frame under the drag) stays inside
+        this same transformed layer too — `ghostStyle` is canvas pixels
+        either way, so both forms need the same layer to render at the
+        right screen size and place.
+      -->
+      <Teleport v-if="dropTargetNode" :to="dropTargetNode">
+        <div v-if="ghostStyle" class="workspace__ghost" :style="ghostStyle" />
+      </Teleport>
+      <div v-else-if="ghostStyle" class="workspace__ghost" :style="ghostStyle" />
+    </div>
 
     <!--
-      The ghost renders as the target's last child — exactly where the
-      real element will be appended — so the preview is laid out by that
-      frame's own flex/grid rules and lands where it appears to.
+      Selects the viewport — pressing it cold is pressing empty canvas
+      (see handlePointerDown), so this bar is the only way in. Once
+      selected, its own body becomes draggable, the same as any other
+      frame. A bar attached above the frame, spanning its width, is where
+      every other canvas tool puts a frame's name, so this doubles as
+      that, ready for when more than one frame exists to tell apart.
 
-      Teleport rather than passing the target down the tree: the ghost
-      stays part of this component's render and is merely *placed*
-      elsewhere in the DOM, so the target element's render function is
-      never invoked. Prop-drilling a ghost target would re-render every
-      element on every frame of every drag.
-
-      The element is passed, not a selector string — a selector resolves
-      via document.querySelector and would need the workspace attached to
-      the document.
-
-      This is a deliberate, narrow exception to the rule that keeps the
-      selection frame out of authored content: the ghost has to
-      participate in layout to preview it at all, it is transient, and it
-      lives outside the `elements` tree, so an export walking that tree
-      can never see it. Do not "fix" it into a sibling.
+      `.stop` on pointerdown keeps the workspace's own handler from ever
+      seeing this press: unhandled, it would resolve to "outside any
+      node" and clear the selection a moment before the click below sets
+      it, relying on batching to land on the right answer instead of just
+      being correct.
     -->
-    <Teleport v-if="dropTargetNode" :to="dropTargetNode">
-      <div v-if="ghostStyle" class="workspace__ghost" :style="ghostStyle" />
-    </Teleport>
-    <div v-else-if="ghostStyle" class="workspace__ghost" :style="ghostStyle" />
+    <button
+      type="button"
+      class="workspace__viewport-bar"
+      :class="{ 'workspace__viewport-bar--selected': selectedId === VIEWPORT_ID }"
+      :style="viewportBarStyle"
+      @pointerdown.stop
+      @click="selectNode(VIEWPORT_ID)"
+    >
+      {{ viewportLabel }}
+    </button>
 
     <!--
       The frame about to receive the element. Drawn flush and only when
@@ -785,9 +1077,22 @@ useCanvasShortcuts({
       Selection frame: a sibling overlay, not a child of the selected
       element — see the comment on selectionRect for why. The frame itself
       stays transparent to the pointer so it never blocks a click on what
-      it surrounds; only the handles take events back.
+      it surrounds; the strips and dots below take events back.
     -->
     <div v-if="selectionFrameStyle" class="workspace__selection" :style="selectionFrameStyle">
+      <!-- Wide hit strips first, so the dots — smaller, and painted after
+           — sit on top of them at each edge's midpoint and corner. Both
+           do the same thing there, but the dots are what a corner's
+           precise diagonal grab actually depends on. -->
+      <span
+        v-for="strip in EDGE_STRIPS"
+        :key="strip.edge"
+        :data-edge="strip.edge"
+        class="workspace__edge-strip"
+        :class="`workspace__edge-strip--${strip.edge}`"
+        :style="{ cursor: strip.cursor }"
+        @pointerdown="handleResizeDown($event, [strip.edge])"
+      />
       <span
         v-for="handle in SELECTION_HANDLES"
         :key="handle.name"
@@ -795,16 +1100,32 @@ useCanvasShortcuts({
         class="workspace__handle"
         :class="handle.corner ? 'workspace__handle--corner' : 'workspace__handle--edge'"
         :style="{ '--handle-x': handle.x, '--handle-y': handle.y, cursor: handle.cursor }"
-        @pointerdown="handleHandleDown($event, handle)"
+        @pointerdown="handleResizeDown($event, handle.edges)"
       />
     </div>
   </div>
 </template>
 
 <style scoped>
+/* Fixed and filling the window, not `min-height: 100vh` and left to the
+   page to scroll: an infinite canvas navigates entirely through its own
+   pan and zoom, so the browser must never scroll it — `overflow: hidden`
+   is what stops a stray native scroll from fighting that. Its own origin
+   is therefore always the window's, which `useCanvasView.ts` relies on. */
 .workspace {
-  position: relative;
-  min-height: 100vh;
+  position: fixed;
+  inset: 0;
+  overflow: hidden;
+}
+
+/* Untransformed by default: `pan` starts at `{ x: 0, y: 0 }`, and this is
+   what makes that mean "canvas (0, 0) renders at the workspace's own
+   top-left" — see the transform-origin comment in the template. */
+.workspace__canvas {
+  position: absolute;
+  left: 0;
+  top: 0;
+  transform-origin: 0 0;
 }
 
 /* Focused programmatically on press, so canvas shortcuts stop landing in
@@ -823,6 +1144,17 @@ useCanvasShortcuts({
   user-select: none;
 }
 
+/* Space held: panning is one press away, same convention as every other
+   canvas tool. Actually panning swaps to `grabbing`, matching the cursor
+   the OS itself uses while a window is being dragged. */
+.workspace--pan-ready {
+  cursor: grab;
+}
+
+.workspace--panning {
+  cursor: grabbing;
+}
+
 /* Elements deliberately keep their pointer events while armed. Events
    bubble to the root where every handler lives and selection is guarded
    by `activeTool`, so a drag starting on an element still draws — and
@@ -834,6 +1166,44 @@ useCanvasShortcuts({
   outline-offset: -1px;
   background-color: color-mix(in srgb, var(--color-accent) 12%, transparent);
   pointer-events: none;
+}
+
+/* A detached tab floating above the frame and spanning its width — its
+   `left`, `top` and `width` all come from `viewportBarStyle`, including
+   the gap that separates it (see VIEWPORT_BAR_GAP there). Rounded on all
+   four corners because it is detached: rounding only the top would imply
+   it was joined to something below it.
+
+   `height` is fixed and never scaled by zoom — chrome, not canvas
+   content, the same posture as the selection handles — and
+   `box-sizing: border-box` keeps the border counted inside that height
+   rather than adding to it, so the gap stays the size it says it is. */
+.workspace__viewport-bar {
+  position: absolute;
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  overflow: hidden;
+  padding: 0 0.625rem;
+  font-size: 0.75rem;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  color: var(--color-fg-muted);
+  background-color: var(--color-surface-raised);
+  border: 1px solid var(--color-border);
+  border-radius: 0.375rem;
+  cursor: pointer;
+}
+
+.workspace__viewport-bar:hover {
+  color: var(--color-fg-default);
+  border-color: var(--color-border-strong);
+}
+
+.workspace__viewport-bar--selected {
+  color: var(--color-fg-on-accent);
+  background-color: var(--color-accent);
+  border-color: var(--color-accent);
 }
 
 /*
@@ -858,6 +1228,63 @@ useCanvasShortcuts({
   outline-offset: -2px;
   background-color: color-mix(in srgb, var(--color-accent) 6%, transparent);
   pointer-events: none;
+}
+
+/*
+ * A wide, invisible strip along each edge, so grabbing a resize works
+ * anywhere along the border — not just the small dot at its midpoint.
+ *
+ * Inset from the corners by 10px on the strip's own long axis, so a
+ * corner stays the dot's alone: dragging near one always resizes both
+ * adjoining edges together, which a strip reaching all the way to the
+ * corner would make ambiguous with a single-edge drag starting right
+ * beside it.
+ *
+ * Centred on the border line the same way the dots are, via `translate`
+ * on the cross axis — an 8px hit width is comfortably grabbable without
+ * visibly widening the 1px line it centres on.
+ */
+.workspace__edge-strip {
+  position: absolute;
+  pointer-events: auto;
+}
+
+.workspace--armed .workspace__edge-strip {
+  pointer-events: none;
+}
+
+.workspace__edge-strip--top,
+.workspace__edge-strip--bottom {
+  left: 10px;
+  right: 10px;
+  height: 8px;
+}
+
+.workspace__edge-strip--left,
+.workspace__edge-strip--right {
+  top: 10px;
+  bottom: 10px;
+  width: 8px;
+}
+
+.workspace__edge-strip--top {
+  top: 0;
+  translate: 0 -50%;
+}
+
+.workspace__edge-strip--bottom {
+  bottom: 0;
+  translate: 0 50%;
+}
+
+.workspace__edge-strip--left {
+  left: 0;
+  translate: -50% 0;
+}
+
+.workspace__edge-strip--right {
+  right: 0;
+  translate: 50% 0;
 }
 
 /* One rule places all eight: each handle carries its own coordinates as
