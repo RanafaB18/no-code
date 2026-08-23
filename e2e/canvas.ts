@@ -34,6 +34,24 @@ export function expectBox(
   if (expected.height !== undefined) expectNear(actual.height, expected.height, 'height')
 }
 
+/**
+ * The canvas cell's own box.
+ *
+ * The canvas is docked between rails, so its top-left is not the window's
+ * and a page coordinate is not a canvas one. Anything positioning a
+ * pointer in canvas terms goes through `canvasPoint` rather than passing
+ * raw page pixels.
+ */
+export async function workspaceBox(page: Page) {
+  return rectOf(page.locator('.workspace'))
+}
+
+/** A page point `dx, dy` from the canvas cell's own top-left. */
+export async function canvasPoint(page: Page, dx: number, dy: number) {
+  const box = await workspaceBox(page)
+  return { x: box.x + dx, y: box.y + dy }
+}
+
 export async function openBuilder(page: Page) {
   await page.goto('/')
   await page.locator(VIEWPORT).waitFor()
@@ -58,12 +76,12 @@ export async function openBuilder(page: Page) {
  * number of presses lands on an exact power of two with no float drift to
  * account for in an assertion.
  *
- * The buttons anchor on the *window's* centre, not the design's — after
- * `openBuilder`'s reset put the canvas at the window's corner rather than
- * its middle, repeated zooming can walk the design toward an edge, or off
- * it, before a test ever gets to draw on it. Panning it back to a fixed,
- * known point afterwards is what makes the zoom level the only thing a
- * test using this actually has to account for.
+ * The buttons anchor on the canvas cell's centre, not the design's —
+ * after `openBuilder`'s reset put the canvas at the cell's corner rather
+ * than its middle, repeated zooming can walk the design toward an edge,
+ * or off it, before a test ever gets to draw on it. Panning it back to a
+ * fixed, known point afterwards is what makes the zoom level the only
+ * thing a test using this actually has to account for.
  *
  * That correction is a plain wheel pan, not a drag: the distance involved
  * can exceed what fits inside the window (a design shifted mostly
@@ -78,9 +96,13 @@ export async function zoomTo(page: Page, factor: number) {
     await button.click()
   }
 
-  const target = { x: 100, y: 100 }
+  // Both points are inside the canvas cell, not the window: a target of
+  // page (100, 100) would sit behind the left rail, so the design would be
+  // parked somewhere no later drag could reach it.
+  const cell = await workspaceBox(page)
+  const target = await canvasPoint(page, 100, 100)
   const viewport = await rectOf(page.locator(VIEWPORT))
-  await page.mouse.move(800, 600)
+  await page.mouse.move(cell.x + cell.width / 2, cell.y + cell.height / 2)
   await page.mouse.wheel(viewport.x - target.x, viewport.y - target.y)
 
   // The selection frame re-measures on a throttled watcher (see

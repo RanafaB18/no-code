@@ -2,7 +2,7 @@ import { computed, ref } from 'vue'
 
 import { VIEWPORT_HEIGHT, VIEWPORT_ID, VIEWPORT_WIDTH, getNode } from './useCanvasNodes'
 
-/** A point in whichever space the caller says — window px, or canvas px. */
+/** A point in whichever space the caller says — client, workspace or canvas px. */
 export interface ViewPoint {
   x: number
   y: number
@@ -25,17 +25,19 @@ function clampZoom(value: number): number {
 }
 
 /**
- * Where canvas point (0, 0) currently renders, in window pixels.
+ * Where canvas point (0, 0) currently renders, in **workspace** pixels —
+ * the space `.workspace__canvas` is positioned in, measured from
+ * `.workspace`'s own top-left rather than the window's.
  *
- * `.workspace` is `position: fixed; inset: 0` (see BuilderWorkspace.vue),
- * so its own top-left is always the window's — there is no separate
- * "workspace-local" space to convert through first, and `pan` can be
- * compared against `event.clientX/clientY` directly. If that ever stops
- * being true, every read of `pan` below needs revisiting alongside it.
+ * The two used to be the same thing, back when the canvas filled the
+ * window. It is docked between rails now, so a client coordinate has to
+ * go through `toWorkspacePoint` (see useWorkspaceRect.ts) before it can be
+ * compared against anything here. Deltas are exempt — the origin cancels
+ * out of a subtraction — which is why `toCanvasDelta` has no partner.
  */
 export const pan = ref<ViewPoint>({ x: 0, y: 0 })
 
-/** How many window pixels one canvas pixel currently renders as. */
+/** How many screen pixels one canvas pixel currently renders as. */
 export const zoom = ref(1)
 
 /**
@@ -52,15 +54,14 @@ export const canvasTransform = computed(
 )
 
 /**
- * A window point — typically straight off `event.clientX/clientY` — as a
- * canvas point.
+ * A workspace point — a client point already run through
+ * `toWorkspacePoint` — as a canvas point.
  *
  * The function every consumer that turns a pointer *position* into
  * something to store must go through. `toCanvasDelta` below is its
- * sibling for a *difference* between two window points — a drag distance
- * rather than a place — which does not need `pan` at all, since pan is
- * constant for the length of a single gesture and cancels out of any
- * subtraction.
+ * sibling for a *difference* between two points — a drag distance rather
+ * than a place — which does not need `pan` at all, since pan is constant
+ * for the length of a single gesture and cancels out of any subtraction.
  */
 export function toCanvasPoint(point: ViewPoint): ViewPoint {
   return {
@@ -69,7 +70,7 @@ export function toCanvasPoint(point: ViewPoint): ViewPoint {
   }
 }
 
-/** A window-pixel distance as the same distance in canvas pixels. */
+/** A screen-pixel distance as the same distance in canvas pixels. */
 export function toCanvasDelta(delta: ViewPoint): ViewPoint {
   return { x: delta.x / zoom.value, y: delta.y / zoom.value }
 }
@@ -79,8 +80,8 @@ export function panBy(dx: number, dy: number): void {
 }
 
 /**
- * Zooms by `factor`, keeping `anchor` — a window point, typically the
- * pointer — visually still.
+ * Zooms by `factor`, keeping `anchor` — a workspace point, typically the
+ * pointer's — visually still.
  *
  * Without re-solving `pan` here, zooming would always scale from canvas
  * (0, 0), so the design would leap sideways under a cursor that was not
@@ -98,29 +99,33 @@ export function zoomBy(factor: number, anchor: ViewPoint): void {
   }
 }
 
-/** Back to the untransformed view: canvas (0, 0) at the window's, 100%. */
+/** Back to the untransformed view: canvas (0, 0) at the workspace's, 100%. */
 export function resetView(): void {
   pan.value = { x: 0, y: 0 }
   zoom.value = 1
 }
 
 /**
- * Centres `rect` (canvas px) inside a `window`-sized view, zoomed to fit
- * it with `margin` window px to spare.
+ * Centres `rect` (canvas px) inside a `view`-sized viewing area, zoomed to
+ * fit it with `margin` screen px to spare.
+ *
+ * `view` is the canvas cell's size, not the window's — see
+ * `workspaceSize`. Naming it `window` would both shadow the global and
+ * describe the wrong box now that the rails take real space out of it.
  */
 export function fitToRect(
   rect: { left: number; top: number; width: number; height: number },
-  window: ViewSize,
+  view: ViewSize,
   margin = FIT_MARGIN,
 ): void {
-  const availableWidth = Math.max(1, window.width - margin * 2)
-  const availableHeight = Math.max(1, window.height - margin * 2)
+  const availableWidth = Math.max(1, view.width - margin * 2)
+  const availableHeight = Math.max(1, view.height - margin * 2)
   const next = clampZoom(Math.min(availableWidth / rect.width, availableHeight / rect.height))
 
   zoom.value = next
   pan.value = {
-    x: window.width / 2 - (rect.left + rect.width / 2) * next,
-    y: window.height / 2 - (rect.top + rect.height / 2) * next,
+    x: view.width / 2 - (rect.left + rect.width / 2) * next,
+    y: view.height / 2 - (rect.top + rect.height / 2) * next,
   }
 }
 
@@ -134,7 +139,7 @@ export function fitToRect(
  * used to be, or the size it used to be, would defeat the point of the
  * button the moment either had changed.
  */
-export function fitToDocument(window: ViewSize): void {
+export function fitToDocument(view: ViewSize): void {
   const node = getNode(VIEWPORT_ID)
   fitToRect(
     {
@@ -143,7 +148,7 @@ export function fitToDocument(window: ViewSize): void {
       width: node?.width ?? VIEWPORT_WIDTH,
       height: node?.height ?? VIEWPORT_HEIGHT,
     },
-    window,
+    view,
   )
 }
 

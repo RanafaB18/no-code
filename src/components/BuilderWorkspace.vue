@@ -21,6 +21,7 @@ import {
   type ViewPoint,
 } from '@/composables/useCanvasView'
 import { onResizeFrame } from '@/composables/useViewport'
+import { toWorkspacePoint, useWorkspaceRect, workspaceRect } from '@/composables/useWorkspaceRect'
 import { SHORTCUT_BOUNDARY, useCanvasShortcuts } from '@/composables/useCanvasShortcuts'
 import { useTools } from '@/composables/useTools'
 import {
@@ -131,6 +132,11 @@ const viewportBarStyle = computed(() => {
 
 const workspace = useTemplateRef<HTMLElement>('workspace')
 
+// Publishes where the canvas cell sits, which is what lets a client
+// coordinate be compared against `pan`. Registered here because this
+// component owns the element.
+useWorkspaceRect(workspace)
+
 /**
  * An element's box in pixels relative to `.workspace` — the space the
  * selection and drop-target overlays are positioned in.
@@ -225,6 +231,13 @@ watch([selectedId, selectedNode], measureSelection, {
 // own styles changing. Throttled — this reads four layout properties, and
 // resize fires continuously while a window edge is dragged.
 useEventListener(window, 'resize', onResizeFrame(measureSelection))
+
+// The canvas cell can also resize without the window doing so — a rail
+// collapsing or widening — which reflows the design inside it just the
+// same. Kept alongside the window listener rather than replacing it: that
+// one still covers a reflow the cell's own size never registers, like a
+// late-loading font.
+watch(workspaceRect, onResizeFrame(measureSelection), { flush: 'post' })
 
 // Panning or zooming moves every node's on-screen box without moving the
 // node itself — `measureSelection` reads real rendered pixels, so without
@@ -376,7 +389,10 @@ const ZOOM_WHEEL_SENSITIVITY = 0.01
 
 function handleWheel(event: WheelEvent) {
   event.preventDefault()
-  const anchor = { x: event.clientX, y: event.clientY }
+  // A position, not a delta, so it needs rebasing onto the cell before
+  // `zoomBy` can solve `pan` against it — otherwise zooming drifts by the
+  // width of the left rail on every notch.
+  const anchor = toWorkspacePoint({ x: event.clientX, y: event.clientY })
 
   if (event.ctrlKey) {
     // Trackpad pinch is reported as a wheel event with `ctrlKey` set —
@@ -400,7 +416,7 @@ const dragOrigin = ref<{ x: number; y: number } | null>(null)
 const dragCurrent = ref<{ x: number; y: number } | null>(null)
 
 /**
- * The drawn rectangle in **viewport** coordinates, normalised so a drag in
+ * The drawn rectangle in **client** coordinates, normalised so a drag in
  * any of the four directions yields positive width and height.
  */
 const dragRect = computed(() => {
@@ -421,9 +437,9 @@ const dragRect = computed(() => {
  * canvas pixels.
  *
  * Absolute offsets resolve against the containing block, which is the
- * target frame — so the window-space pointer coordinates have to be
+ * target frame — so the client-space pointer coordinates have to be
  * rebased onto it, or every nested node would be positioned as though it
- * sat at the page origin. `dragRect` is real window pixels either way
+ * sat at the page origin. `dragRect` is real client pixels either way
  * (both corners came straight from `event.clientX/clientY`), so the
  * result needs converting to canvas units regardless of which branch
  * below runs — only *what it is rebased onto* differs.
@@ -439,7 +455,7 @@ function geometryFor(target: HTMLElement | null) {
   if (target) {
     local = toCanvasLocal(rect, target)
   } else {
-    const origin = toCanvasPoint({ x: rect.left, y: rect.top })
+    const origin = toCanvasPoint(toWorkspacePoint({ x: rect.left, y: rect.top }))
     local = {
       left: origin.x,
       top: origin.y,
@@ -1158,8 +1174,12 @@ useCanvasShortcuts({
 /* Fixed and filling the window, not `min-height: 100vh` and left to the
    page to scroll: an infinite canvas navigates entirely through its own
    pan and zoom, so the browser must never scroll it — `overflow: hidden`
-   is what stops a stray native scroll from fighting that. Its own origin
-   is therefore always the window's, which `useCanvasView.ts` relies on. */
+   is what stops a stray native scroll from fighting that.
+
+   Nothing depends on this filling the window any more: pointer positions
+   are rebased through `toWorkspacePoint` and "fit" sizes itself from
+   `workspaceSize`, both of which measure this element rather than assume
+   it starts at the window's corner. */
 .workspace {
   position: fixed;
   inset: 0;

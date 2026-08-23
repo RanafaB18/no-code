@@ -3,7 +3,8 @@ import { mount, type VueWrapper } from '@vue/test-utils'
 import { nextTick } from 'vue'
 
 import BuilderWorkspace from '../components/BuilderWorkspace.vue'
-import { resetView } from '../composables/useCanvasView'
+import { resetView, toCanvasPoint, zoom } from '../composables/useCanvasView'
+import { toWorkspacePoint, workspaceOrigin } from '../composables/useWorkspaceRect'
 import { DEFAULT_FRAME_LAYOUT, frameLayout } from '../composables/useFrameTool'
 import { useTools } from '../composables/useTools'
 import { VIEWPORT_ID } from '../composables/useCanvasNodes'
@@ -81,6 +82,9 @@ beforeEach(() => {
   disarm()
   // Module-level singleton like the armed tool, so it leaks between tests.
   frameLayout.value = DEFAULT_FRAME_LAYOUT
+  // Another one. Unmounting resets it, but a test that sets it without
+  // mounting would otherwise carry it into the next.
+  workspaceOrigin.value = { x: 0, y: 0 }
   // Every geometry assertion below assumes pan/zoom are still identity —
   // BuilderWorkspace itself never touches them (see App.vue for why), but
   // reset explicitly rather than relying on that by omission.
@@ -778,5 +782,67 @@ describe('Workspace', () => {
     await nextTick()
 
     expect(viewport.value.childrenIds).toHaveLength(0)
+  })
+
+  /**
+   * The canvas is docked between rails, so a pointer's `clientX/clientY`
+   * is offset from the space `pan` lives in. jsdom reports every box as
+   * zero, so the offset can't come from real layout — these set
+   * `workspaceOrigin` directly, which is the whole reason it is a cached
+   * ref rather than a `getBoundingClientRect` at each call site.
+   *
+   * Always *after* mounting: the workspace measures itself on mount, and
+   * in jsdom that measurement is zero, so a stub set beforehand would be
+   * overwritten before the gesture ever ran.
+   */
+  describe('with the canvas offset from the window', () => {
+    /** Deliberately not round, so an off-by-one has nowhere to hide. */
+    const ORIGIN = { x: 91, y: 57 }
+
+    it('rebases a bare-canvas draw onto the workspace, not the window', async () => {
+      arm('frame')
+      const wrapper = mount(BuilderWorkspace)
+      workspaceOrigin.value = { ...ORIGIN }
+
+      await drag(
+        wrapper.element,
+        { x: ORIGIN.x + 10, y: ORIGIN.y + 10 },
+        { x: ORIGIN.x + 110, y: ORIGIN.y + 80 },
+      )
+
+      // The same box the un-offset drag draws: the pointer moved with the
+      // canvas, so what it drew should not have.
+      const drawn = getNode(viewport.value.childrenIds[0])
+      expect(drawn).toMatchObject({ left: 10, top: 10, width: 100, height: 70 })
+    })
+
+    it('anchors a pinch-zoom on the canvas point under the pointer', async () => {
+      const wrapper = mount(BuilderWorkspace)
+      workspaceOrigin.value = { ...ORIGIN }
+
+      const pointer = { x: ORIGIN.x + 300, y: ORIGIN.y + 200 }
+      const before = toCanvasPoint(toWorkspacePoint(pointer))
+
+      wrapper.element.dispatchEvent(
+        new WheelEvent('wheel', {
+          deltaY: -100,
+          ctrlKey: true,
+          clientX: pointer.x,
+          clientY: pointer.y,
+          bubbles: true,
+          cancelable: true,
+        }),
+      )
+      await nextTick()
+
+      expect(zoom.value).toBeGreaterThan(1)
+      // Zooming moved `pan`, so this only still holds if the anchor was
+      // rebased the same way on the way in. Feeding `zoomBy` the raw
+      // client point instead pins the wrong canvas point and this drifts
+      // by the offset.
+      const after = toCanvasPoint(toWorkspacePoint(pointer))
+      expect(after.x).toBeCloseTo(before.x)
+      expect(after.y).toBeCloseTo(before.y)
+    })
   })
 })

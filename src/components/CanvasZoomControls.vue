@@ -2,7 +2,7 @@
 import { computed } from 'vue'
 
 import { fitToDocument, resetView, zoom, zoomBy } from '@/composables/useCanvasView'
-import { viewportHeight, viewportWidth } from '@/composables/useViewport'
+import { workspaceSize } from '@/composables/useWorkspaceRect'
 
 /**
  * Fit / reset / step controls for the infinite canvas, plus a live zoom
@@ -21,20 +21,29 @@ import { viewportHeight, viewportWidth } from '@/composables/useViewport'
  */
 const ZOOM_STEP = 2
 
-function windowCenter() {
-  return { x: viewportWidth.value / 2, y: viewportHeight.value / 2 }
+/**
+ * The middle of the canvas cell, which is already a workspace point —
+ * `zoomBy` wants one of those, so unlike a pointer position there is
+ * nothing to rebase here.
+ *
+ * The cell rather than the window: with the rails taking real space out
+ * of the window, zooming about the window's centre would walk the design
+ * steadily toward whichever rail is wider.
+ */
+function canvasCenter() {
+  return { x: workspaceSize.value.width / 2, y: workspaceSize.value.height / 2 }
 }
 
 function handleZoomIn() {
-  zoomBy(ZOOM_STEP, windowCenter())
+  zoomBy(ZOOM_STEP, canvasCenter())
 }
 
 function handleZoomOut() {
-  zoomBy(1 / ZOOM_STEP, windowCenter())
+  zoomBy(1 / ZOOM_STEP, canvasCenter())
 }
 
 function handleFit() {
-  fitToDocument({ width: viewportWidth.value, height: viewportHeight.value })
+  fitToDocument(workspaceSize.value)
 }
 
 const zoomLabel = computed(() => `${Math.round(zoom.value * 100)}%`)

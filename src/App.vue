@@ -7,7 +7,7 @@ import CanvasZoomControls from '@/components/CanvasZoomControls.vue'
 import StyleInspector from '@/components/StyleInspector.vue'
 import ThemeToggle from '@/components/ThemeToggle.vue'
 import { fitToDocument } from '@/composables/useCanvasView'
-import { viewportHeight, viewportWidth } from '@/composables/useViewport'
+import { workspaceSize } from '@/composables/useWorkspaceRect'
 
 /**
  * Centres the design once, when the app first loads — the entire point of
@@ -21,9 +21,13 @@ import { viewportHeight, viewportWidth } from '@/composables/useViewport'
  * Keeping this app-level, where no test asserts canvas coordinates,
  * avoids re-fitting (and re-breaking that assumption) on every one of
  * those mounts.
+ *
+ * Being the parent's hook is also what makes `workspaceSize` readable by
+ * now: Vue mounts children first, so the workspace has already measured
+ * its own cell by the time this runs.
  */
 onMounted(() => {
-  fitToDocument({ width: viewportWidth.value, height: viewportHeight.value })
+  fitToDocument(workspaceSize.value)
 })
 </script>
 

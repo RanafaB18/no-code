@@ -2,6 +2,7 @@ import { expect, test } from '@playwright/test'
 
 import {
   VIEWPORT,
+  canvasPoint,
   drawFrame,
   dragBy,
   expectBox,
@@ -123,8 +124,9 @@ test.describe('Canvas view', () => {
     // nothing there. A press on the canvas moves focus onto it first, the
     // same way drawing does in every other pan test, before space-drag
     // panning is asked to do anything.
-    await page.mouse.click(800, 600)
-    await panBy(page, { x: 800, y: 600 }, 0, 250)
+    const from = await canvasPoint(page, 400, 300)
+    await page.mouse.click(from.x, from.y)
+    await panBy(page, from, 0, 250)
 
     const bar = await rectOf(page.locator('.workspace__viewport-bar'))
     const viewport = await rectOf(page.locator(VIEWPORT))
@@ -136,8 +138,9 @@ test.describe('Canvas view', () => {
   })
 
   test('the viewport bar keeps its gap at every zoom, in screen pixels', async ({ page }) => {
-    await page.mouse.click(800, 600)
-    await panBy(page, { x: 800, y: 600 }, 0, 250)
+    const from = await canvasPoint(page, 400, 300)
+    await page.mouse.click(from.x, from.y)
+    await panBy(page, from, 0, 250)
     await zoomTo(page, 2)
 
     const bar = await rectOf(page.locator('.workspace__viewport-bar'))
