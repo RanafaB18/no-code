@@ -117,9 +117,11 @@ test.describe('Sizing modes', () => {
     await drawFrame(page, { x: parent.x + 60, y: parent.y + 60 }, { width: 120, height: 90 })
 
     // The parent imposes no layout, so this child is absolute — flex-grow
-    // would never reach it. It fills by pinning both edges instead.
+    // would never reach it. It fills by pinning both edges instead. No
+    // blank option: the mode is never genuinely unset, so there is
+    // nothing for one to mean.
     const modes = page.locator('#field-widthMode option')
-    await expect(modes).toHaveText(['—', 'fixed', 'relative', 'fit'])
+    await expect(modes).toHaveText(['fixed', 'relative', 'fit'])
   })
 
   test('fit shrinks to contents rather than stretching across a flex row', async ({ page }) => {

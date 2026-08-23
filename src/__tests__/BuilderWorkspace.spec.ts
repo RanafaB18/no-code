@@ -544,7 +544,14 @@ describe('Workspace', () => {
   })
 
   it('moves an absolutely positioned node by dragging it', async () => {
-    const node = addNode('div', { left: 40, top: 30, width: 100, height: 60 })
+    const node = addNode('div', {
+      left: 40,
+      top: 30,
+      width: 100,
+      height: 60,
+      pinLeft: true,
+      pinTop: true,
+    })
     const wrapper = mount(BuilderWorkspace, { attachTo: document.body })
     await nextTick()
 
@@ -595,7 +602,14 @@ describe('Workspace', () => {
   })
 
   it('moves the origin as well as the size when dragging a top-left handle', async () => {
-    const node = addNode('div', { left: 40, top: 30, width: 100, height: 60 })
+    const node = addNode('div', {
+      left: 40,
+      top: 30,
+      width: 100,
+      height: 60,
+      pinLeft: true,
+      pinTop: true,
+    })
     const wrapper = mount(BuilderWorkspace, { attachTo: document.body })
     selectNode(node.id)
     await nextTick()
@@ -608,7 +622,14 @@ describe('Workspace', () => {
   })
 
   it('pins the dragged edge rather than inverting the box past the far one', async () => {
-    const node = addNode('div', { left: 40, top: 30, width: 100, height: 60 })
+    const node = addNode('div', {
+      left: 40,
+      top: 30,
+      width: 100,
+      height: 60,
+      pinLeft: true,
+      pinTop: true,
+    })
     const wrapper = mount(BuilderWorkspace, { attachTo: document.body })
     selectNode(node.id)
     await nextTick()

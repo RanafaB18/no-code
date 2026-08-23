@@ -65,6 +65,22 @@ export interface NodeGeometry {
   top?: number
   bottom?: number
   height?: number
+  /**
+   * Which edges are pinned — a fixed distance from the parent — as
+   * opposed to a live, unpinned one. Separate from whether `left`/`top`/
+   * `right`/`bottom` themselves hold a value: pinning is a claim about
+   * behaviour on parent resize, not about data presence. See
+   * `stretchesAxis` and `NodeRenderer.vue`'s `edgeFor` for what each
+   * combination actually renders as.
+   *
+   * When neither edge of an axis is pinned, the near edge (`left`/`top`)
+   * is still populated — but as a percentage of the parent, not px, so
+   * the box stays genuinely proportional rather than silently fixed.
+   */
+  pinLeft?: boolean
+  pinRight?: boolean
+  pinTop?: boolean
+  pinBottom?: boolean
 }
 
 /**
@@ -310,14 +326,30 @@ export function updateStyle(id: NodeId, key: string, value: string): void {
   if (node) node.styles[key] = value
 }
 
-/** O(1). Undefined values clear a pin rather than being written. */
+/**
+ * O(1). Undefined values clear a pin rather than being written.
+ *
+ * Every value that survives rounds to a whole number here, in the one
+ * place every geometry write already passes through — a resize drag at a
+ * fractional zoom, the aspect-lock counterpart, a measured pin, and a
+ * typed inspector value all land here, so rounding here rounds all of
+ * them rather than relying on each call site to remember to.
+ */
 export function updateGeometry(id: NodeId, patch: NodeGeometry): void {
   const node = getNode(id)
   if (!node) return
 
-  for (const [key, value] of Object.entries(patch) as [keyof NodeGeometry, number | undefined][]) {
+  for (const [key, value] of Object.entries(patch) as [
+    keyof NodeGeometry,
+    number | boolean | undefined,
+  ][]) {
     if (value === undefined) delete node[key]
-    else node[key] = value
+    // The four pin flags are booleans, not geometry — nothing to round.
+    // TS can't correlate `key` and `value`'s types across the union here,
+    // so the boundary is asserted once, in this one generic loop, rather
+    // than losing the union entirely at every call site.
+    else if (typeof value === 'boolean') (node[key] as boolean) = value
+    else (node[key] as number) = Math.round(value)
   }
 }
 
@@ -352,6 +384,22 @@ export const AXIS_EDGES = {
   height: ['top', 'bottom'],
 } as const satisfies Record<SizeAxis, readonly (keyof NodeGeometry)[]>
 
+/** The two pin flags bounding an axis, same order as `AXIS_EDGES`. */
+export const PIN_EDGES = {
+  width: ['pinLeft', 'pinRight'],
+  height: ['pinTop', 'pinBottom'],
+} as const satisfies Record<SizeAxis, readonly (keyof NodeGeometry)[]>
+
+export type Edge = 'left' | 'right' | 'top' | 'bottom'
+
+/** Each edge's own pin flag, shared by every consumer that toggles one. */
+export const PIN_KEY = {
+  left: 'pinLeft',
+  right: 'pinRight',
+  top: 'pinTop',
+  bottom: 'pinBottom',
+} as const satisfies Record<Edge, keyof NodeGeometry>
+
 /**
  * True when both edges of an axis are pinned.
  *
@@ -359,13 +407,18 @@ export const AXIS_EDGES = {
  * element stretches as the parent widens, which is the whole point of
  * modelling geometry as edge pins instead of x/y/w/h.
  *
- * Every consumer asks this rather than checking the two fields itself:
- * the renderer must withhold the stated size, and the inspector must stop
+ * Reads the pin flags, not whether `left`/`right` happen to hold a
+ * value — pinned and "has a stored number" are different questions. A
+ * proportional (unpinned-both) axis still has a real number in its near
+ * edge, but it isn't stretching.
+ *
+ * Every consumer asks this rather than checking the flags itself: the
+ * renderer must withhold the stated size, and the inspector must stop
  * offering to edit it.
  */
 export function stretchesAxis(node: CanvasNode, axis: SizeAxis): boolean {
-  const [start, end] = AXIS_EDGES[axis]
-  return node[start] !== undefined && node[end] !== undefined
+  const [start, end] = PIN_EDGES[axis]
+  return !!node[start] && !!node[end]
 }
 
 /**

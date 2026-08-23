@@ -24,6 +24,7 @@ import { onResizeFrame } from '@/composables/useViewport'
 import { SHORTCUT_BOUNDARY, useCanvasShortcuts } from '@/composables/useCanvasShortcuts'
 import { useTools } from '@/composables/useTools'
 import {
+  PIN_KEY,
   VIEWPORT_HEIGHT,
   VIEWPORT_ID,
   VIEWPORT_WIDTH,
@@ -34,6 +35,7 @@ import {
   stretchesAxis,
   useCanvasNodes,
   type CanvasNode,
+  type Edge,
   type NodeGeometry,
   type NodeId,
   type SizeAxis,
@@ -235,9 +237,6 @@ useEventListener(window, 'resize', onResizeFrame(measureSelection))
 // has been patched into the DOM, so it would measure the transform that
 // is about to be replaced, not the one just written.
 watch(canvasTransform, onResizeFrame(measureSelection), { flush: 'post' })
-
-/** The sides of a box a gesture can drag. */
-type Edge = 'top' | 'right' | 'bottom' | 'left'
 
 interface SelectionHandle {
   name: string
@@ -611,7 +610,27 @@ function beginTransform(event: PointerEvent, nodeId: NodeId, edges: readonly Edg
   if (!node) return
 
   const measured = measureNodeRect(nodeId)
-  const released = edges.filter((edge) => node[OPPOSITE_EDGE[edge]] !== undefined)
+  const isMove = edges.length === 0
+
+  // A resize releases the opposite edge only when it's actually pinned —
+  // dragging a handle on an already near-only box has nothing to give up.
+  // A move releases any far-edge pin outright: it is establishing a fresh
+  // left/top position regardless of which edge used to anchor the box,
+  // the same as drawing or leaving the flow always does.
+  const released = isMove
+    ? (['right', 'bottom'] as const).filter((edge) => node[PIN_KEY[edge]] === true)
+    : edges.filter((edge) => node[PIN_KEY[OPPOSITE_EDGE[edge]]] === true)
+
+  // Pinned, not merely present — a proportional or far-held edge can
+  // still carry a stored number (a percentage, or an inert leftover)
+  // that isn't the real on-screen position, so it falls back to a
+  // measurement exactly as an edge with no stored number at all would.
+  const start = {
+    left: node.pinLeft ? (node.left ?? measured?.left ?? 0) : (measured?.left ?? 0),
+    top: node.pinTop ? (node.top ?? measured?.top ?? 0) : (measured?.top ?? 0),
+    width: startSize(node, measured, 'width'),
+    height: startSize(node, measured, 'height'),
+  }
 
   transform = {
     nodeId,
@@ -620,14 +639,9 @@ function beginTransform(event: PointerEvent, nodeId: NodeId, edges: readonly Edg
     ratio: aspectRatioOf(node),
     absolute: resolvedPosition(node) === 'absolute',
     origin: { x: event.clientX, y: event.clientY },
-    start: {
-      left: node.left ?? measured?.left ?? 0,
-      top: node.top ?? measured?.top ?? 0,
-      width: startSize(node, measured, 'width'),
-      height: startSize(node, measured, 'height'),
-    },
-    // All four pins, not just the origin pair: a gesture can drop one, so
-    // cancelling has to be able to put it back.
+    start,
+    // All four pins and their flags, not just the origin pair: a gesture
+    // can drop one, so cancelling has to be able to put it back exactly.
     restore: {
       left: node.left,
       right: node.right,
@@ -635,15 +649,45 @@ function beginTransform(event: PointerEvent, nodeId: NodeId, edges: readonly Edg
       bottom: node.bottom,
       width: node.width,
       height: node.height,
+      pinLeft: node.pinLeft,
+      pinRight: node.pinRight,
+      pinTop: node.pinTop,
+      pinBottom: node.pinBottom,
     },
     moved: false,
   }
 
-  // Snapshotted above first, so Escape can restore what this drops.
-  if (released.length > 0) {
+  // Snapshotted above first, so Escape can restore what this drops. The
+  // flag goes with the value — leaving it pinned while the number
+  // underneath disappears would mislead the constraint widget about
+  // which edge is actually anchoring the box.
+  if (isMove) {
+    // A move always states left/top outright — whatever was anchoring
+    // the box before (a far edge, or nothing at all), the gesture is a
+    // fresh, explicit position, same as drawing or leaving the flow.
+    const patch: NodeGeometry = { pinLeft: true, pinTop: true }
+    if (released.includes('right')) {
+      patch.right = undefined
+      patch.pinRight = false
+      updateSizeMode(nodeId, 'width', 'fixed')
+      patch.width = start.width
+    }
+    if (released.includes('bottom')) {
+      patch.bottom = undefined
+      patch.pinBottom = false
+      updateSizeMode(nodeId, 'height', 'fixed')
+      patch.height = start.height
+    }
+    updateGeometry(nodeId, patch)
+  } else if (released.length > 0) {
     updateGeometry(
       nodeId,
-      Object.fromEntries(released.map((edge) => [edge, undefined])) as NodeGeometry,
+      Object.fromEntries(
+        released.flatMap((edge) => [
+          [edge, undefined],
+          [PIN_KEY[edge], false],
+        ]),
+      ) as NodeGeometry,
     )
   }
 
@@ -930,9 +974,13 @@ function handlePointerUp(event: PointerEvent) {
     // A frame that imposes a layout places its own children, so the drawn
     // offsets would be inert — only the size survives. Emitting left/top
     // there would put values in the inspector the browser ignores.
+    //
+    // Drawing states a position, same as it always has — pinLeft/pinTop
+    // are what make that explicit now, rather than left/top's mere
+    // presence implying it.
     const placed =
       dropTargetLayout.value === 'none'
-        ? geometry
+        ? { ...geometry, pinLeft: true, pinTop: true }
         : { width: geometry.width, height: geometry.height }
 
     const created = addNode(tool.creates, { ...tool.seedInit(), ...placed }, dropTargetId.value)

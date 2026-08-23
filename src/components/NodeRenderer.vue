@@ -73,6 +73,36 @@ function fillFor(current: CanvasNode, axis: SizeAxis) {
 }
 
 /**
+ * One axis's offset(s), from its pin flags rather than which of the two
+ * edge fields happen to hold a value — pinned and "has a number" are
+ * different questions (see `NodeGeometry`'s own doc comment).
+ *
+ *   both pinned    → both edges, in px — over-constrained together with
+ *                     the size withheld above, so the browser derives it
+ *   far edge only  → the far edge, in px; size stays stated
+ *   near edge only → the near edge, in px; size stays stated
+ *   neither pinned → the near edge, as a **percentage** — proportional,
+ *                     recomputed by the browser as the parent resizes,
+ *                     the same mechanism `sizeFor` already uses for a
+ *                     `relative` size
+ *
+ * A parentless node (only the viewport today) has no resizable parent to
+ * pin against or be proportional to, so it skips all of this — its
+ * near edge is always a plain, fixed px position.
+ */
+function edgeFor(current: CanvasNode, start: 'left' | 'top', end: 'right' | 'bottom') {
+  if (current.parentId === null) return { [start]: px(current[start]) }
+
+  const pinStart = start === 'left' ? current.pinLeft : current.pinTop
+  const pinEnd = end === 'right' ? current.pinRight : current.pinBottom
+
+  if (pinStart && pinEnd) return { [start]: px(current[start]), [end]: px(current[end]) }
+  if (pinEnd) return { [end]: px(current[end]) }
+  if (pinStart) return { [start]: px(current[start]) }
+  return { [start]: `${current[start] ?? 0}%` }
+}
+
+/**
  * Geometry only applies when the node positions itself. Under a flex or
  * grid parent the offsets are meaningless — the parent places it — so
  * they are withheld rather than emitted and ignored, which keeps the DOM
@@ -93,15 +123,12 @@ function geometryFor(current: CanvasNode) {
   return {
     ...size,
     // Pinning both edges of an axis derives the size from the parent, so
-    // the stated one is withheld. Emitting all three over-constrains the
-    // box, and CSS resolves that by dropping `right` — silently undoing
-    // the pin just set, which would read as the widget being broken.
+    // the stated one is withheld — `edgeFor` below emits both edges only
+    // in that case, so there's nothing left to conflict with.
     width: stretchesAxis(current, 'width') ? undefined : size.width,
     height: stretchesAxis(current, 'height') ? undefined : size.height,
-    left: px(current.left),
-    right: px(current.right),
-    top: px(current.top),
-    bottom: px(current.bottom),
+    ...edgeFor(current, 'left', 'right'),
+    ...edgeFor(current, 'top', 'bottom'),
   }
 }
 

@@ -47,14 +47,18 @@ test.describe('Constraints', () => {
   test('pinning both edges derives the size, and the frame stretches', async ({ page }) => {
     const { parentNode, parent, child } = await drawNested(page)
 
+    // Pinning a still-unpinned edge locks it at whatever it currently
+    // measures, not a hardcoded distance — so the frame does not jump the
+    // moment the second edge locks in. 60 left, 200 wide, in a 600 parent
+    // leaves 340 to the right edge.
     await page.locator('[data-pin="right"]').click()
+    await expect(page.locator('#field-right')).toHaveValue('340')
+    expectNear((await rectOf(child)).width, 200, 'width unchanged by pinning')
 
-    // left: 60 and right: 0 across a 600 parent leaves 540.
-    expectNear((await rectOf(child)).width, 540, 'stretched width')
-    // The stated width is gone from the inspector, because the parent
-    // decides it now — offering a box would imply otherwise.
-    await expect(page.locator('#field-width')).toHaveCount(0)
-    await expect(page.locator('#field-right')).toBeVisible()
+    // The parent decides the width now, but the field still shows the
+    // real current size rather than disappearing, same as an unpinned
+    // edge does.
+    await expect(page.locator('#field-width')).toHaveValue('200')
 
     // Widen the parent: a derived size follows, where a stated one would
     // not. This is the entire point of modelling geometry as edge pins.
@@ -62,7 +66,26 @@ test.describe('Constraints', () => {
     await page.fill('#field-width', '800')
     await expect(parentNode).toHaveCSS('width', '800px')
 
-    expectNear((await rectOf(child)).width, 740, 'width after the parent grew')
+    // 800 wide, minus the 60 left and 340 right that stayed fixed.
+    expectNear((await rectOf(child)).width, 400, 'width after the parent grew')
+  })
+
+  test('typing into a derived width states it, releasing the far pin', async ({ page }) => {
+    const { child } = await drawNested(page)
+    await page.locator('[data-pin="right"]').click()
+
+    const before = await rectOf(child)
+    await page.fill('#field-width', '150')
+
+    // Typing states the width explicitly, which only one edge can still
+    // define — the far one gives way, the near one (what it was drawn
+    // from) stays the anchor.
+    await expect(page.locator('[data-pin="left"]')).toHaveAttribute('aria-pressed', 'true')
+    await expect(page.locator('[data-pin="right"]')).toHaveAttribute('aria-pressed', 'false')
+
+    const after = await rectOf(child)
+    expectNear(after.width, 150, 'stated width applied')
+    expectNear(after.x, before.x, 'left edge stayed anchored')
   })
 
   test('pinning the far edge alone holds the frame against it', async ({ page }) => {
@@ -88,16 +111,55 @@ test.describe('Constraints', () => {
     expectNear(after.width, before.width, 'width unchanged')
   })
 
-  test('the last pin on an axis cannot be removed', async ({ page }) => {
-    await drawNested(page)
+  test('unpinning an axis down to none makes it proportional, not stuck', async ({ page }) => {
+    const { parentNode, parent, child } = await drawNested(page)
 
-    // An axis with no pins has nothing positioning it, so the element
-    // would fall back to where it would have sat in flow — a jump with no
-    // visible cause. To move off an edge you pin the other one first.
-    await expect(page.locator('[data-pin="left"]')).toBeDisabled()
+    // Left is the only pin on the width axis. Un-pinning it has nowhere
+    // else to fall back to, so the axis becomes proportional instead of
+    // the button refusing the click.
+    await page.locator('[data-pin="left"]').click()
+    await expect(page.locator('[data-pin="left"]')).toHaveAttribute('aria-pressed', 'false')
+    await expect(page.locator('[data-pin="right"]')).toHaveAttribute('aria-pressed', 'false')
 
-    await page.locator('[data-pin="right"]').click()
-    await expect(page.locator('[data-pin="left"]')).toBeEnabled()
+    // Becoming proportional doesn't itself move anything on screen.
+    const before = await rectOf(child)
+    expectNear(before.x, parent.x + 60, 'left unchanged by un-pinning')
+    expectNear(before.width, 200, 'width unchanged by un-pinning')
+
+    await page.mouse.click(parent.x + 500, parent.y + 350)
+    await page.fill('#field-width', '1200')
+    await expect(parentNode).toHaveCSS('width', '1200px')
+
+    // 60 of 600 was 10% — doubling the parent doubles the distance with
+    // it, which a fixed pixel offset never would.
+    const after = await rectOf(child)
+    expectNear(after.x, parent.x + 120, 'left tracks the parent proportionally')
+    expectNear(after.width, 200, "the child's own width is untouched by it")
+  })
+
+  test('the centre toggles every edge at once, without ever moving the frame', async ({ page }) => {
+    const { child } = await drawNested(page)
+    const toggleAll = page.locator('.pins__toggle-all')
+
+    // Drawn from the top-left: top and left already hold, right and
+    // bottom don't — not everything is pinned yet, so the first click
+    // pins what's missing rather than clearing what's there.
+    const before = await rectOf(child)
+    await toggleAll.click()
+    for (const edge of ['top', 'right', 'bottom', 'left']) {
+      await expect(page.locator(`[data-pin="${edge}"]`)).toHaveAttribute('aria-pressed', 'true')
+    }
+    expectBox(await rectOf(child), before)
+
+    // Now everything is pinned, so the same button clears everything —
+    // unconditionally, not just down to one pin per axis the way a
+    // single edge's own button would leave it — becoming proportional on
+    // both axes at once, without a jump either.
+    await toggleAll.click()
+    for (const edge of ['top', 'right', 'bottom', 'left']) {
+      await expect(page.locator(`[data-pin="${edge}"]`)).toHaveAttribute('aria-pressed', 'false')
+    }
+    expectBox(await rectOf(child), before)
   })
 
   test('resizing a stretched frame states its size again', async ({ page }) => {

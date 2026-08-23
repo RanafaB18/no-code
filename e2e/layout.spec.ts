@@ -90,6 +90,7 @@ test.describe('Layout', () => {
 
     await page.fill('#field-left', '400')
     await page.fill('#field-top', '250')
+    await page.keyboard.press('Tab')
 
     expectBox(await rectOf(children.nth(1)), { x: parent.x + 400, y: parent.y + 250 })
     // Its sibling keeps flowing, and reclaims the space it vacated.

@@ -23,7 +23,7 @@ test.describe('Aspect ratio lock', () => {
     await page.locator(lock).click()
 
     await expect(page.locator(lock)).toHaveAttribute('aria-pressed', 'true')
-    await expect(page.locator(lock)).toContainText('1.50')
+    await expect(page.locator(lock)).toHaveAttribute('title', /1\.50/)
   })
 
   test('carries the other axis when a size is typed', async ({ page }) => {

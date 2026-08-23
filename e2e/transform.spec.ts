@@ -246,6 +246,29 @@ test.describe('Move and resize', () => {
     await expect(page.locator('#field-top')).toHaveValue('90')
   })
 
+  test('the viewport gets a plain X/Y, not the Type selector or constraint widget', async ({
+    page,
+  }) => {
+    const before = await rectOf(page.locator(VIEWPORT))
+    await page.locator('.workspace__viewport-bar').click()
+
+    // No resizable parent to position against, so neither of these mean
+    // anything for it — only a parented frame gets them.
+    await expect(page.locator('#field-position')).toHaveCount(0)
+    await expect(page.locator('[role="group"][aria-label="Constraints"]')).toHaveCount(0)
+
+    // X/Y is directly typeable, not just draggable.
+    await page.fill('#field-left', '300')
+    await page.fill('#field-top', '150')
+
+    expectBox(await rectOf(page.locator(VIEWPORT)), {
+      x: before.x + 300,
+      y: before.y + 150,
+      width: before.width,
+      height: before.height,
+    })
+  })
+
   test('pressing the viewport cold clears the selection rather than moving it', async ({
     page,
   }) => {

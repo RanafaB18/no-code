@@ -1,10 +1,10 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
 
-import AspectLock from '@/components/AspectLock.vue'
 import ConstraintPins from '@/components/ConstraintPins.vue'
 import CornerRadius from '@/components/CornerRadius.vue'
 import DraggablePanel from '@/components/DraggablePanel.vue'
+import SizePair from '@/components/SizePair.vue'
 import { measureNodeRect } from '@/composables/nodeMeasure'
 import {
   isWidget,
@@ -16,17 +16,12 @@ import {
 } from '@/composables/styleSchema'
 import { anchorRightMiddle } from '@/composables/useDraggablePanel'
 import {
-  DEFAULT_SIZE_MODE,
-  aspectRatioOf,
-  counterpartSize,
   resolvedPosition,
   useCanvasNodes,
   type CanvasNode,
   type NodeGeometry,
   type NodeLayout,
   type NodePosition,
-  type SizeAxis,
-  type SizeMode,
 } from '@/composables/useCanvasNodes'
 
 const { selectedNode, updateStyle, updateGeometry, updateSizeMode, updateLayout, updatePosition } =
@@ -77,34 +72,14 @@ function setValue(property: StyleProperty, value: string) {
     return
   }
 
-  if (property.key === 'widthMode' || property.key === 'heightMode') {
-    const axis: SizeAxis = property.key === 'widthMode' ? 'width' : 'height'
-    updateSizeMode(node.id, axis, (value || DEFAULT_SIZE_MODE) as SizeMode)
-    return
-  }
-
-  // Geometry. An empty field clears the pin rather than writing 0 —
-  // "unset" and "zero" are different, and conflating them would silently
-  // move an element to the origin.
+  // Geometry — X/Y for a parentless node, the only case left that
+  // reaches here; a parented node's offsets live inside `ConstraintPins`
+  // now, which writes for itself. An empty field clears the pin rather
+  // than writing 0 — "unset" and "zero" are different, and conflating
+  // them would silently move an element to the origin.
   const numeric = value === '' ? undefined : Number(value)
   if (numeric !== undefined && !Number.isFinite(numeric)) return
-  updateGeometry(node.id, { [property.key]: numeric, ...counterpart(node, property.key, numeric) })
-}
-
-/**
- * The other axis, when a locked ratio means it has to follow.
- *
- * Skipped for a cleared field: an axis with no size has no shape, so
- * scaling the other one from it would be scaling from nothing.
- */
-function counterpart(node: CanvasNode, key: string, value: number | undefined): NodeGeometry {
-  if (value === undefined || (key !== 'width' && key !== 'height')) return {}
-
-  const ratio = aspectRatioOf(node)
-  if (ratio === null) return {}
-
-  const axis: SizeAxis = key
-  return { [axis === 'width' ? 'height' : 'width']: counterpartSize(ratio, axis, value) }
+  updateGeometry(node.id, { [property.key]: numeric })
 }
 
 /**
@@ -121,10 +96,16 @@ function pinsFor(node: CanvasNode) {
   if (!rect) return null
 
   const pins: NodeGeometry = {}
-  // Only for an axis with nothing holding it — an edge the user already
-  // pinned is a decision, not a gap to fill in.
-  if (node.left === undefined && node.right === undefined) pins.left = Math.round(rect.left)
-  if (node.top === undefined && node.bottom === undefined) pins.top = Math.round(rect.top)
+  // A relative node has never had pins of its own — leaving the flow
+  // states a fresh, fixed position, the same default a drawn frame gets.
+  if (!node.pinLeft && !node.pinRight) {
+    pins.left = Math.round(rect.left)
+    pins.pinLeft = true
+  }
+  if (!node.pinTop && !node.pinBottom) {
+    pins.top = Math.round(rect.top)
+    pins.pinTop = true
+  }
 
   // `fill` is granted by the parent's layout, which has stopped placing
   // this node — left alone the box would collapse to nothing.
@@ -287,8 +268,8 @@ function handleInput(property: StyleProperty, event: Event) {
               :node="selectedNode"
             />
 
-            <AspectLock
-              v-else-if="property.input === 'aspect'"
+            <SizePair
+              v-else-if="property.input === 'size-pair'"
               :id="`field-${property.key}`"
               :node="selectedNode"
             />

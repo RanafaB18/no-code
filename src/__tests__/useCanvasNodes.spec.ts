@@ -93,6 +93,17 @@ describe('useCanvasNodes', () => {
     expect(getNode(node.id)?.left).toBeUndefined()
   })
 
+  it('rounds every value it writes to a whole number', () => {
+    const node = addNode('div')
+
+    // A fractional zoom, a resize drag, a typed value — nothing about
+    // this function knows or cares where the number came from, so the
+    // one check here has to stand in for all of them.
+    updateGeometry(node.id, { left: 40.4, top: 40.5, width: 199.6, height: 12.49 })
+
+    expect(getNode(node.id)).toMatchObject({ left: 40, top: 41, width: 200, height: 12 })
+  })
+
   it('updates styles on the addressed node only', () => {
     const first = addNode('div')
     const second = addNode('div')
@@ -304,7 +315,14 @@ describe('useCanvasNodes', () => {
     })
 
     it('cannot hold across an axis the parent derives', () => {
-      const node = addNode('div', { left: 0, right: 0, width: 300, height: 200 })
+      const node = addNode('div', {
+        left: 0,
+        right: 0,
+        width: 300,
+        height: 200,
+        pinLeft: true,
+        pinRight: true,
+      })
 
       expect(canLockAspect(node)).toBe(false)
     })

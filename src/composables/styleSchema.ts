@@ -1,13 +1,8 @@
 import {
-  canLockAspect,
-  isViewport,
   resolvedPosition,
-  stretchesAxis,
-  usesSizeValue,
   type CanvasNode,
   type NodeLayout,
   type NodePosition,
-  type SizeAxis,
   type SizeMode,
 } from './useCanvasNodes'
 
@@ -34,14 +29,14 @@ import {
  * their own control and write through directly rather than going through
  * the shared field row.
  *
- *   'pins'    the constraint widget — which edges are anchored
- *   'aspect'  the width/height ratio lock
- *   'corners' border radius, uniform or per corner
+ *   'pins'      the constraint widget — which edges are anchored
+ *   'size-pair' Width and Height together, plus the ratio lock between them
+ *   'corners'   border radius, uniform or per corner
  */
 export type StyleInputType =
-  'number' | 'length' | 'color' | 'select' | 'pins' | 'aspect' | 'corners'
+  'number' | 'length' | 'color' | 'select' | 'pins' | 'size-pair' | 'corners'
 
-const WIDGET_INPUTS: readonly StyleInputType[] = ['pins', 'aspect', 'corners']
+const WIDGET_INPUTS: readonly StyleInputType[] = ['pins', 'size-pair', 'corners']
 
 /**
  * True for a property with no single field behind it.
@@ -156,6 +151,18 @@ function isPositioned(node: CanvasNode) {
   return resolvedPosition(node) === 'absolute'
 }
 
+/**
+ * True when the node has a real parent to position against.
+ *
+ * Only the viewport lacks one today, and it changes what "Position" even
+ * means: a parentless node has no resizable container to anchor to or
+ * stretch with, so it gets a plain X/Y instead of the type selector and
+ * constraint widget a parented node uses.
+ */
+function hasParent(node: CanvasNode) {
+  return node.parentId !== null
+}
+
 /** True when the node arranges its own children, so flex/grid options apply. */
 function laysOutChildren(node: CanvasNode) {
   return node.layout !== 'none'
@@ -176,32 +183,9 @@ export const SIZE_MODES = [
  * stopped laying out. Such a node fills by pinning both edges instead —
  * the constraint widget, not this control.
  */
-function sizeModesFor(node: CanvasNode): readonly string[] {
+export function sizeModesFor(node: CanvasNode): readonly string[] {
   if (resolvedPosition(node) === 'relative') return SIZE_MODES
   return SIZE_MODES.filter((mode) => mode !== 'fill')
-}
-
-/** True when an edge is pinned, so its distance is real and editable. */
-function pinned(edge: 'left' | 'right' | 'top' | 'bottom') {
-  return (node: CanvasNode) => isPositioned(node) && node[edge] !== undefined
-}
-
-/**
- * True when the axis has a size to state.
- *
- * Both a mode that reads no number and a pair of pins that derive the
- * size take the field away — in the second case because the parent
- * decides it, and offering a box would imply otherwise.
- */
-function statesSize(axis: SizeAxis) {
-  return (node: CanvasNode) =>
-    usesSizeValue(axis === 'width' ? node.widthMode : node.heightMode) && !stretchesAxis(node, axis)
-}
-
-/** The unit the number beside a mode is read in. */
-function unitFor(axis: SizeAxis) {
-  return (node: CanvasNode) =>
-    (axis === 'width' ? node.widthMode : node.heightMode) === 'relative' ? '%' : 'px'
 }
 
 export const STYLE_PROPERTIES: readonly StyleProperty[] = [
@@ -250,9 +234,30 @@ export const STYLE_PROPERTIES: readonly StyleProperty[] = [
     appliesTo: laysOutChildren,
   },
 
-  // Position — how this frame places itself. Offsets are hidden when a
-  // parent lays it out, since it is then placed by the parent and the
-  // values would do nothing.
+  // Position — three different shapes, chosen by the node itself rather
+  // than any one flag. A parentless node (only the viewport today) has
+  // no resizable container to position against, so it gets a plain X/Y —
+  // reusing the `left`/`top` fields directly, under different labels,
+  // rather than inventing aliases that would need their own read/write
+  // path. A parented node gets the type selector, and — only once it
+  // positions itself — the constraint widget, which now carries its own
+  // numeric fields internally; there is nothing left to list beside it.
+  {
+    key: 'left',
+    section: 'position',
+    label: 'X',
+    input: 'number',
+    source: 'node',
+    appliesTo: (node) => !hasParent(node),
+  },
+  {
+    key: 'top',
+    section: 'position',
+    label: 'Y',
+    input: 'number',
+    source: 'node',
+    appliesTo: (node) => !hasParent(node),
+  },
   {
     key: 'position',
     section: 'position',
@@ -260,10 +265,7 @@ export const STYLE_PROPERTIES: readonly StyleProperty[] = [
     input: 'select',
     source: 'node',
     options: POSITION_VALUES,
-    // The viewport is the coordinate origin — there is nothing above it to
-    // position against — so `updatePosition` refuses it. Offering the
-    // control anyway would be offering one that silently does nothing.
-    appliesTo: (node) => !isViewport(node.id),
+    appliesTo: hasParent,
   },
   {
     key: 'pins',
@@ -271,88 +273,18 @@ export const STYLE_PROPERTIES: readonly StyleProperty[] = [
     label: 'Constraints',
     input: 'pins',
     source: 'node',
-    appliesTo: isPositioned,
-  },
-  // One field per pinned edge. An unpinned edge has no distance to show,
-  // so an empty box there would invite typing a value the widget is the
-  // only way to actually establish.
-  {
-    key: 'left',
-    section: 'position',
-    label: 'Left',
-    input: 'number',
-    source: 'node',
-    appliesTo: pinned('left'),
-  },
-  {
-    key: 'right',
-    section: 'position',
-    label: 'Right',
-    input: 'number',
-    source: 'node',
-    appliesTo: pinned('right'),
-  },
-  {
-    key: 'top',
-    section: 'position',
-    label: 'Top',
-    input: 'number',
-    source: 'node',
-    appliesTo: pinned('top'),
-  },
-  {
-    key: 'bottom',
-    section: 'position',
-    label: 'Bottom',
-    input: 'number',
-    source: 'node',
-    appliesTo: pinned('bottom'),
+    appliesTo: (node) => hasParent(node) && isPositioned(node),
   },
 
-  // Size — a mode per axis, then the number that mode reads. The number
-  // is hidden under `fill` and `fit`, which take no value at all.
+  // Size — Width and Height together, one row each, plus the ratio lock
+  // between them. One entry rather than five: the widget owns both axes'
+  // writes itself, including the locked-ratio counterpart.
   {
-    key: 'widthMode',
+    key: 'size',
     section: 'size',
-    label: 'Width',
-    input: 'select',
+    label: 'Size',
+    input: 'size-pair',
     source: 'node',
-    options: sizeModesFor,
-  },
-  {
-    key: 'width',
-    section: 'size',
-    label: 'W',
-    input: 'number',
-    source: 'node',
-    placeholder: unitFor('width'),
-    appliesTo: statesSize('width'),
-  },
-  {
-    key: 'heightMode',
-    section: 'size',
-    label: 'Height',
-    input: 'select',
-    source: 'node',
-    options: sizeModesFor,
-  },
-  {
-    key: 'height',
-    section: 'size',
-    label: 'H',
-    input: 'number',
-    source: 'node',
-    placeholder: unitFor('height'),
-    appliesTo: statesSize('height'),
-  },
-  // Last in the section, under the two fields it ties together.
-  {
-    key: 'aspectRatio',
-    section: 'size',
-    label: 'Ratio',
-    input: 'aspect',
-    source: 'node',
-    appliesTo: canLockAspect,
   },
 
   // Appearance.

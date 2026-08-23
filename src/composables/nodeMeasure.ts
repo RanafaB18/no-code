@@ -91,3 +91,27 @@ export function measureNodeRect(id: NodeId): Rect | null {
   if (!element || !parent) return null
   return toCanvasLocal(element.getBoundingClientRect(), parent)
 }
+
+/** A node's own rendered size, in canvas pixels. */
+export interface Size {
+  width: number
+  height: number
+}
+
+/**
+ * A node's own rendered size, independent of its parent — unlike
+ * `measureNodeRect`, which is always relative to one.
+ *
+ * What "distance from the right/bottom edge" needs alongside a child's
+ * own rect: that distance is `parent size − child offset − child size`,
+ * and the parent's own size is not something `measureNodeRect` can
+ * answer — asking for *its* rect would rebase it onto its own parent,
+ * one level further up than wanted.
+ */
+export function measureNodeSize(id: NodeId | null | undefined): Size | null {
+  const element = nodeElement(id)
+  if (!element) return null
+  const box = element.getBoundingClientRect()
+  const z = zoom.value
+  return { width: box.width / z, height: box.height / z }
+}
