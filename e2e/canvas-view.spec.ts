@@ -155,7 +155,7 @@ test.describe('Canvas view', () => {
     page,
   }) => {
     // The default, unpanned position: the design is centred against the
-    // window's own top, so there is nowhere above the frame to float.
+    // canvas cell's own top, so there is nowhere above the frame to float.
     // This is the *common* state, not an edge case — and the bar is the
     // only way to select the viewport, so it must not be clipped away.
     const viewport = await rectOf(page.locator(VIEWPORT))

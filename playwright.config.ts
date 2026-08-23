@@ -13,10 +13,16 @@ export default defineConfig({
   testDir: './e2e',
 
   // The canvas is a fixed 1440x1024 page, and there is no browser
-  // scrollbar to fall back on any more — the workspace pans and zooms
-  // internally rather than participating in page scroll. A window
-  // smaller than the design would put part of it permanently out of
-  // pointer reach.
+  // scrollbar to fall back on — the workspace pans and zooms internally
+  // rather than participating in page scroll.
+  //
+  // The canvas is also only the cell between the docked rails, so at this
+  // window it is roughly 1100x1150: enough for most of the design at zoom
+  // 1, but not all 1440 of its width. A test that needs to reach further
+  // than that should `zoomTo(page, 0.5)` first, or pan the part it cares
+  // about into the cell — widening the window here is the last resort,
+  // since every coordinate in the suite is already relative to the cell
+  // or to the design's own box.
   use: {
     baseURL: 'http://localhost:5173',
     viewport: { width: 1600, height: 1200 },

@@ -8,9 +8,11 @@ import { workspaceSize } from '@/composables/useWorkspaceRect'
  * Fit / reset / step controls for the infinite canvas, plus a live zoom
  * readout.
  *
- * A sibling of the workspace, not a part of it — same posture as
- * `ThemeToggle`: chrome that floats over the canvas rather than
- * participating in it, so it carries `data-shortcut-boundary` and reads
+ * The one piece of chrome that still floats: it belongs to the canvas
+ * rather than to the window, so it rides inside the canvas cell instead
+ * of docking to an edge. A sibling of the workspace and not a part of it,
+ * which is what keeps a press on a button out of the canvas's own pointer
+ * handlers. Being chrome, it carries `data-shortcut-boundary` and reads
  * `useCanvasView()` directly rather than taking props.
  *
  * A clean doubling per click (2×, not some fussier 1.25×) is deliberate:
@@ -61,11 +63,15 @@ const zoomLabel = computed(() => `${Math.round(zoom.value * 100)}%`)
 </template>
 
 <style scoped>
+/* Positioned against the canvas cell, not the window — docked rails would
+   otherwise sit on top of it. A sibling of `.workspace` rather than a
+   child, so a press on a button never reaches the canvas's own pointer
+   handlers and clears the selection or starts a draw. */
 .zoom-controls {
-  position: fixed;
-  bottom: 1.5rem;
-  left: 1.5rem;
-  z-index: 20;
+  position: absolute;
+  bottom: 1rem;
+  left: 1rem;
+  z-index: 1;
   display: flex;
   align-items: stretch;
   gap: 1px;

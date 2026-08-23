@@ -3,7 +3,6 @@ import { computed, ref, watch } from 'vue'
 
 import ConstraintPins from '@/components/ConstraintPins.vue'
 import CornerRadius from '@/components/CornerRadius.vue'
-import DraggablePanel from '@/components/DraggablePanel.vue'
 import SizePair from '@/components/SizePair.vue'
 import { measureNodeRect } from '@/composables/nodeMeasure'
 import {
@@ -14,7 +13,6 @@ import {
   type SectionId,
   type StyleProperty,
 } from '@/composables/styleSchema'
-import { anchorRightMiddle } from '@/composables/useDraggablePanel'
 import {
   resolvedPosition,
   useCanvasNodes,
@@ -205,11 +203,13 @@ function handleInput(property: StyleProperty, event: Event) {
 </script>
 
 <template>
-  <DraggablePanel class="inspector" :anchor="anchorRightMiddle" aria-label="Element styles">
-    <template #handle>
-      <span class="inspector__grip" aria-hidden="true">⠿</span>
+  <!-- `data-shortcut-boundary` used to come from DraggablePanel. It is
+       load-bearing, not decoration: without it Backspace in a field
+       deletes the selected element instead of a character. -->
+  <aside class="inspector rail rail--right" data-shortcut-boundary aria-label="Element styles">
+    <div class="inspector__header">
       <h2 class="inspector__title">Inspector</h2>
-    </template>
+    </div>
 
     <p v-if="!selectedNode" class="inspector__empty">Select an element to edit its styles.</p>
 
@@ -332,28 +332,29 @@ function handleInput(property: StyleProperty, event: Event) {
         </div>
       </section>
     </template>
-  </DraggablePanel>
+  </aside>
 </template>
 
 <style scoped>
-/* Positioning, surface and handle chrome all come from DraggablePanel;
-   only the inspector's own layout and fields are here. */
+/* Placement, surface and the divider come from App.vue, which owns how
+   the window is divided. Only the inspector's own layout and fields are
+   here — the width in particular is the grid track's now, so the rail and
+   its contents cannot disagree about it.
+
+   `scrollbar-gutter` reserves the scrollbar's space up front: the fields
+   are a fixed-width column, and letting a scrollbar appear as sections
+   expand would shave ~15px off every row that is already showing. */
 .inspector {
-  width: 16rem;
-  max-height: 100vh;
   padding: 0.75rem;
   overflow-y: auto;
+  scrollbar-gutter: stable;
 }
 
-.inspector :deep(.panel__handle) {
+.inspector__header {
   display: flex;
   align-items: center;
   gap: 0.375rem;
   margin-bottom: 0.75rem;
-}
-
-.inspector__grip {
-  color: var(--color-fg-subtle);
 }
 
 .inspector__title {

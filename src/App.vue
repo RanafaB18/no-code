@@ -1,11 +1,11 @@
 <script setup lang="ts">
 import { onMounted } from 'vue'
 
-import BuilderToolbar from '@/components/BuilderToolbar.vue'
+import BuilderSidebar from '@/components/BuilderSidebar.vue'
+import BuilderTopBar from '@/components/BuilderTopBar.vue'
 import BuilderWorkspace from '@/components/BuilderWorkspace.vue'
 import CanvasZoomControls from '@/components/CanvasZoomControls.vue'
 import StyleInspector from '@/components/StyleInspector.vue'
-import ThemeToggle from '@/components/ThemeToggle.vue'
 import { fitToDocument } from '@/composables/useCanvasView'
 import { workspaceSize } from '@/composables/useWorkspaceRect'
 
@@ -32,53 +32,103 @@ onMounted(() => {
 </script>
 
 <template>
-  <main class="page">
-    <BuilderWorkspace />
+  <main class="shell">
+    <BuilderTopBar />
+    <BuilderSidebar />
 
-    <!-- Both float above the workspace and are freely moveable, so the
-         workspace keeps its full width — no space is reserved for them. -->
-    <BuilderToolbar />
-    <StyleInspector />
-
-    <CanvasZoomControls />
-
-    <div class="theme-toggle-wrapper">
-      <ThemeToggle />
+    <!-- The canvas cell, not the workspace itself. The zoom controls float
+         over the canvas but must not be *part* of it: inside `.workspace`
+         their clicks would bubble into its pointer handlers and clear the
+         selection, or start drawing when a tool is armed. A positioned
+         wrapper keeps them siblings, which is the arrangement that already
+         worked when both floated over a full-window canvas. -->
+    <div class="shell__canvas">
+      <BuilderWorkspace />
+      <CanvasZoomControls />
     </div>
 
-    <!--
-      Kept for reference: this demonstrated the theme tokens before the
-      builder existed. The workspace is the page content now.
-
-    <section class="card">
-      <p>Default text — the primary reading colour.</p>
-      <p class="muted">Muted text — secondary information.</p>
-      <p class="subtle">Subtle text — captions, hints, metadata.</p>
-      <button type="button" class="btn btn--accent">Accent button</button>
-      <button type="button" class="btn btn--danger">Danger button</button>
-    </section>
-    -->
+    <StyleInspector />
   </main>
 </template>
 
 <style scoped>
-.page {
-  min-height: 100vh;
+.shell {
+  /* Widths live here rather than in each rail: they are a statement about
+     how the window is divided, and the rails are what fills the result. */
+  --topbar-height: 3rem;
+  --rail-left: 15rem;
+  /* Wider than the 16rem the inspector used to declare for itself. That
+     width never actually fitted its widest row — the size pair needs
+     ~308px — and a floating panel simply overflowed into a horizontal
+     scrollbar. A docked track has to be honest about it. */
+  --rail-right: 21rem;
+
+  display: grid;
+  grid-template-columns: var(--rail-left) minmax(0, 1fr) var(--rail-right);
+  grid-template-rows: var(--topbar-height) minmax(0, 1fr);
+  grid-template-areas:
+    'topbar topbar topbar'
+    'rail-left canvas rail-right';
+  /* dvh, not vh: on a mobile browser whose chrome retracts on scroll, vh
+     is the *largest* viewport, so the bottom of the shell would sit under
+     the address bar. */
+  height: 100dvh;
+  /* The shell itself never scrolls — the canvas pans and the rails scroll
+     internally. `minmax(0, 1fr)` above is the other half of that: without
+     it a track is floored by its content's min-content size and the grid
+     grows past the window instead of the content overflowing inside it. */
+  overflow: hidden;
 }
 
-.theme-toggle-wrapper {
-  position: fixed;
-  bottom: 1.5rem;
-  right: 1.5rem;
-  /* Above the workspace, so it stays clickable even while a tool is
-     armed and the workspace is capturing drags. */
+.shell__canvas {
+  grid-area: canvas;
+  /* The containing block for the workspace and the zoom controls, both
+     absolutely positioned within it. */
+  position: relative;
+  /* Its own stacking context, so nothing inside the canvas — a selection
+     frame, a drag ghost — can paint over a rail no matter its z-index. */
+  z-index: 0;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+/* Where each region sits and what separates it from the next, kept here
+   rather than in the four components: this is one statement about how the
+   window is divided, and splitting it across the pieces being divided
+   makes it unreadable. Each component still owns its own insides.
+
+   These reach the components because Vue's `scoped` applies the parent's
+   scope id to a child component's ROOT element — which is exactly why the
+   rules below are all root-element selectors, and why anything nested
+   deeper has to stay in the child's own stylesheet. */
+.topbar {
+  grid-area: topbar;
+  /* Above the rails, so a menu opened in the bar hangs down over them. */
   z-index: 20;
-  display: flex;
-  justify-content: flex-end;
+  background-color: var(--color-surface-raised);
+  border-bottom: 1px solid var(--color-border);
 }
 
-/* The demo card's styles lived here. Removed rather than kept alongside
-   the commented-out markup: scoped CSS is not tree-shaken against a
-   commented template, so they were still being compiled into the bundle.
-   Recoverable from git if the demo is ever restored. */
+.rail {
+  /* Above the canvas cell, below the top bar. */
+  z-index: 10;
+  display: flex;
+  flex-direction: column;
+  /* A grid item's default `min-height: auto` floors it at its content's
+     height, which would push a long rail past the bottom of the window
+     instead of letting it scroll inside. */
+  min-height: 0;
+  background-color: var(--color-surface-raised);
+}
+
+.rail--left {
+  grid-area: rail-left;
+  border-right: 1px solid var(--color-border);
+}
+
+.rail--right {
+  grid-area: rail-right;
+  border-left: 1px solid var(--color-border);
+}
 </style>

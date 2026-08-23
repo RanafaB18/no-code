@@ -246,16 +246,12 @@ describe('Inspector', () => {
     })
   })
 
-  it('offers no orientation control', () => {
+  it('keeps keystrokes in its fields away from the canvas', () => {
+    // The boundary used to come from the floating panel wrapper. It is
+    // what stops Backspace in a width field deleting the selected element
+    // instead of a character — see `useCanvasShortcuts`.
     const wrapper = mount(StyleInspector)
 
-    expect(wrapper.find('.inspector__orientation').exists()).toBe(false)
-  })
-
-  it('does not persist its position', async () => {
-    mount(StyleInspector, { attachTo: document.body })
-    await nextTick()
-
-    expect(localStorage.getItem('panel:inspector')).toBeNull()
+    expect(wrapper.find('.inspector[data-shortcut-boundary]').exists()).toBe(true)
   })
 })

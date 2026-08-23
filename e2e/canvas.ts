@@ -56,8 +56,8 @@ export async function openBuilder(page: Page) {
   await page.goto('/')
   await page.locator(VIEWPORT).waitFor()
 
-  // The app centres and fits the design to the window on load, which is
-  // deliberately *not* 100% whenever the window has room to spare — so a
+  // The app centres and fits the design to the canvas on load, which is
+  // deliberately *not* 100% whenever the canvas has room to spare — so a
   // fresh load does not, in general, put the canvas at zoom 1. Nearly
   // every test here was written against real pixels standing in directly
   // for canvas ones, which only holds at zoom 1, so tests get a
@@ -84,8 +84,8 @@ export async function openBuilder(page: Page) {
  * thing a test using this actually has to account for.
  *
  * That correction is a plain wheel pan, not a drag: the distance involved
- * can exceed what fits inside the window (a design shifted mostly
- * off-screen needs a correction bigger than the window itself), and a
+ * can exceed what fits inside the canvas (a design shifted mostly
+ * off-screen needs a correction bigger than the canvas itself), and a
  * wheel event pans without the pointer having to physically travel that
  * far the way `panBy`'s drag would need to.
  */

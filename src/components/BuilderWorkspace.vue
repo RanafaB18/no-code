@@ -114,9 +114,9 @@ const VIEWPORT_BAR_OFFSET = VIEWPORT_BAR_HEIGHT + VIEWPORT_BAR_GAP
  *
  * The fallback matters more than it looks: "room above" is relative to
  * wherever the design happens to sit, and `fitToDocument` centres it
- * against the window's own top on load — so a frame with no space above
- * it is the *default* state, not an edge case. Without the fallback the
- * bar would spend that whole time clipped off the top of the window,
+ * against the canvas cell's own top on load — so a frame with no space
+ * above it is the *default* state, not an edge case. Without the fallback
+ * the bar would spend that whole time clipped off the top of the canvas,
  * taking the only way to select the viewport with it.
  */
 const viewportBarStyle = computed(() => {
@@ -1171,17 +1171,21 @@ useCanvasShortcuts({
 </template>
 
 <style scoped>
-/* Fixed and filling the window, not `min-height: 100vh` and left to the
-   page to scroll: an infinite canvas navigates entirely through its own
-   pan and zoom, so the browser must never scroll it — `overflow: hidden`
-   is what stops a stray native scroll from fighting that.
+/* Fills its cell, and never scrolls: an infinite canvas navigates
+   entirely through its own pan and zoom, so `overflow: hidden` is what
+   stops a stray native scroll from fighting that.
 
-   Nothing depends on this filling the window any more: pointer positions
-   are rebased through `toWorkspacePoint` and "fit" sizes itself from
+   Absolutely positioned rather than being the grid item itself, so it
+   stays a positioned ancestor — `.workspace__canvas`, the viewport bar,
+   the drop target and the selection frame all position against it, and a
+   static grid item would send all four out to the page instead.
+
+   Nothing depends on where this sits any more: pointer positions are
+   rebased through `toWorkspacePoint` and "fit" sizes itself from
    `workspaceSize`, both of which measure this element rather than assume
    it starts at the window's corner. */
 .workspace {
-  position: fixed;
+  position: absolute;
   inset: 0;
   overflow: hidden;
 }
