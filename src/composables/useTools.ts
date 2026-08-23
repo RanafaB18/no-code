@@ -1,14 +1,13 @@
 import { computed, ref } from 'vue'
 
-import { frameLayout } from './useFrameTool'
 import type { ElementType, NodeInit } from './useCanvasNodes'
 
 export interface Tool {
   /**
    * The tool's own identity — deliberately *not* the element type it
-   * creates. Several tools can emit the same tag with different seed
-   * styles, which is exactly what a Frame set to `flex` versus `block`
-   * is, so the two can no longer be the same field.
+   * creates. Several tools emit the same tag with different seed fields,
+   * which is exactly what Frame, Flex and Grid are, so the two cannot be
+   * the same field.
    */
   id: string
   /** Toolbar button text. */
@@ -24,19 +23,25 @@ export interface Tool {
   /**
    * The node fields and styles stamped onto whatever this tool creates.
    *
-   * A function rather than a literal so a tool can carry a user-chosen
-   * option — the Frame tool's display — while still being a static
-   * registry entry.
+   * A function rather than a literal so that a tool handing out object
+   * fields cannot hand the same object to two nodes. Each entry's seed is
+   * fixed — a tool *is* one kind of thing to draw, so there is nothing
+   * left here for a separate mode selector to vary.
    */
   seedInit: () => NodeInit
 }
 
 /**
- * The creation tools available in the toolbar.
+ * The creation tools available to draw with.
  *
- * Adding a tool is one entry here: the toolbar renders from this array
+ * Adding a tool is one entry here: the tool menu renders from this array
  * and the keyboard handler resolves shortcuts against it, so neither
  * needs editing to pick up a new tool.
+ *
+ * All three draw the same tag and differ only in the layout they stamp —
+ * which is the distinction that matters to someone drawing, since it
+ * decides whether the box they get places its children where they put
+ * them or arranges them itself.
  *
  * `as const satisfies` rather than a `: readonly Tool[]` annotation:
  * the annotation would widen `id` to `string` and lose `ToolId` as a
@@ -48,7 +53,23 @@ export const TOOLS = [
     label: 'Frame',
     shortcut: '1',
     creates: 'div',
-    seedInit: () => ({ layout: frameLayout.value }),
+    // `none` is a frame that imposes no layout, so children sit at the
+    // coordinates they were drawn at — what makes drawing WYSIWYG.
+    seedInit: (): NodeInit => ({ layout: 'none' }),
+  },
+  {
+    id: 'flex',
+    label: 'Flex',
+    shortcut: '2',
+    creates: 'div',
+    seedInit: (): NodeInit => ({ layout: 'flex' }),
+  },
+  {
+    id: 'grid',
+    label: 'Grid',
+    shortcut: '3',
+    creates: 'div',
+    seedInit: (): NodeInit => ({ layout: 'grid' }),
   },
 ] as const satisfies readonly Tool[]
 

@@ -136,16 +136,22 @@ export async function nodeIdsOf(children: Locator): Promise<(string | undefined)
   )
 }
 
+/** The tool that draws a frame with each layout — see `TOOLS`. */
+const TOOL_LABEL: Record<NodeLayout, string> = {
+  none: 'Frame',
+  flex: 'Flex',
+  grid: 'Grid',
+}
+
 /**
- * Arms the frame tool with a layout.
+ * Arms the tool that draws a frame with `layout`.
  *
- * The layout is always chosen rather than left to default, because
- * choosing is also what closes the menu — leaving it open would hang a
- * panel over the top of the canvas the next drag has to draw on.
+ * Named for the layout rather than the tool so that every caller reads as
+ * "draw me a frame that lays out like this", which is what the tests
+ * actually care about — the tool is just how you ask for one.
  */
 export async function armFrame(page: Page, layout: NodeLayout = 'none') {
-  await page.locator('.frame-tool .toolbar__button').click()
-  await page.locator('.frame-tool__option', { hasText: layout }).click()
+  await page.getByRole('button', { name: TOOL_LABEL[layout], exact: false }).click()
 }
 
 /** Draws a box, arming the tool first — one draw disarms it again. */

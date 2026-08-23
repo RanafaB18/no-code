@@ -4,12 +4,12 @@ import { useTemplateRef } from 'vue'
 /**
  * The pill button shared by every toolbar tool.
  *
- * Extracted rather than left as duplicated class names in
- * BuilderToolbar.vue and FrameToolControl.vue: Vue's `scoped` attribute
- * only reaches a child component's root element, never elements nested
- * inside it. Two components separately writing `class="toolbar__button"`
- * looked identical in the markup but silently compiled to two different
- * scope hashes, so only one of them ever actually received the CSS.
+ * Extracted rather than left as duplicated class names across the
+ * components that render tools: Vue's `scoped` attribute only reaches a
+ * child component's root element, never elements nested inside it. Two
+ * components separately writing `class="toolbar__button"` looked
+ * identical in the markup but silently compiled to two different scope
+ * hashes, so only one of them ever actually received the CSS.
  *
  * Extra attributes (title, aria-expanded, aria-controls, ...) fall
  * through onto the root <button> automatically — this component has a

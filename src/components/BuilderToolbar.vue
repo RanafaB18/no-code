@@ -2,7 +2,6 @@
 import { computed, nextTick, ref, useTemplateRef } from 'vue'
 
 import DraggablePanel from '@/components/DraggablePanel.vue'
-import FrameToolControl from '@/components/FrameToolControl.vue'
 import ToolButton from '@/components/ToolButton.vue'
 import { anchorTopCenter } from '@/composables/useDraggablePanel'
 import { TOOLS, useTools } from '@/composables/useTools'
@@ -41,22 +40,16 @@ function toggleOrientation() {
 
     <!-- Rendered from TOOLS, so a new tool appears by adding one entry.
          aria-pressed rather than a radiogroup: a tool can be toggled off
-         entirely, leaving idle/select mode, which radios can't express.
-
-         Tools with variants get their own control; the generic button is
-         the fallback for tools that just arm and draw. -->
-    <template v-for="tool in TOOLS" :key="tool.id">
-      <FrameToolControl v-if="tool.id === 'frame'" :tool="tool" :orientation="orientation" />
-
-      <ToolButton
-        v-else
-        :label="tool.label"
-        :shortcut="tool.shortcut"
-        :active="activeToolId === tool.id"
-        :title="`${tool.label} (${tool.shortcut})`"
-        @click="toggle(tool.id)"
-      />
-    </template>
+         entirely, leaving idle/select mode, which radios can't express. -->
+    <ToolButton
+      v-for="tool in TOOLS"
+      :key="tool.id"
+      :label="tool.label"
+      :shortcut="tool.shortcut"
+      :active="activeToolId === tool.id"
+      :title="`${tool.label} (${tool.shortcut})`"
+      @click="toggle(tool.id)"
+    />
 
     <button
       type="button"

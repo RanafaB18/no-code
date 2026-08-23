@@ -1,15 +1,13 @@
 import { beforeEach, describe, expect, it } from 'vitest'
 
 import { TOOLS, useTools } from '../composables/useTools'
-import { DEFAULT_FRAME_LAYOUT, frameLayout } from '../composables/useFrameTool'
 import { ELEMENT_TYPES } from '../composables/useCanvasNodes'
-import { toStyleBinding, STYLE_PROPERTIES } from '../composables/styleSchema'
+import { LAYOUT_VALUES, toStyleBinding, STYLE_PROPERTIES } from '../composables/styleSchema'
 
 const { activeToolId, activeTool, arm, disarm, toggle } = useTools()
 
 beforeEach(() => {
   disarm()
-  frameLayout.value = DEFAULT_FRAME_LAYOUT
 })
 
 describe('useTools', () => {
@@ -41,12 +39,25 @@ describe('useTools', () => {
     }
   })
 
-  it('seeds the layout the frame tool currently has selected', () => {
-    frameLayout.value = 'grid'
-    expect(TOOLS[0]?.seedInit()).toEqual({ layout: 'grid' })
+  it('seeds each tool with its own fixed layout', () => {
+    expect(TOOLS.map((tool) => [tool.id, tool.seedInit()])).toEqual([
+      ['frame', { layout: 'none' }],
+      ['flex', { layout: 'flex' }],
+      ['grid', { layout: 'grid' }],
+    ])
+  })
 
-    frameLayout.value = DEFAULT_FRAME_LAYOUT
-    expect(TOOLS[0]?.seedInit()).toEqual({ layout: DEFAULT_FRAME_LAYOUT })
+  it('offers a tool for every layout a frame can have', () => {
+    // Otherwise a layout would be reachable only by drawing something else
+    // and changing it afterwards in the inspector.
+    const seeded = TOOLS.map((tool) => tool.seedInit().layout)
+
+    expect(new Set(seeded)).toEqual(new Set(LAYOUT_VALUES))
+  })
+
+  it('hands out a fresh seed each time, never a shared object', () => {
+    // Two nodes drawn with one tool must not end up sharing fields.
+    expect(TOOLS[0]?.seedInit()).not.toBe(TOOLS[0]?.seedInit())
   })
 
   it('gives every tool a unique id and shortcut', () => {

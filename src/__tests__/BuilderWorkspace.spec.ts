@@ -5,7 +5,6 @@ import { nextTick } from 'vue'
 import BuilderWorkspace from '../components/BuilderWorkspace.vue'
 import { resetView, toCanvasPoint, zoom } from '../composables/useCanvasView'
 import { toWorkspacePoint, workspaceOrigin } from '../composables/useWorkspaceRect'
-import { DEFAULT_FRAME_LAYOUT, frameLayout } from '../composables/useFrameTool'
 import { useTools } from '../composables/useTools'
 import { VIEWPORT_ID } from '../composables/useCanvasNodes'
 import { getNode, useCanvasNodes } from '../composables/useCanvasNodes'
@@ -81,9 +80,8 @@ beforeEach(() => {
   selectNode(null)
   disarm()
   // Module-level singleton like the armed tool, so it leaks between tests.
-  frameLayout.value = DEFAULT_FRAME_LAYOUT
-  // Another one. Unmounting resets it, but a test that sets it without
-  // mounting would otherwise carry it into the next.
+  // Unmounting resets it, but a test that sets it without mounting would
+  // otherwise carry it into the next.
   workspaceOrigin.value = { x: 0, y: 0 }
   // Every geometry assertion below assumes pan/zoom are still identity —
   // BuilderWorkspace itself never touches them (see App.vue for why), but
@@ -111,7 +109,7 @@ describe('Workspace', () => {
     const drawn = getNode(viewport.value.childrenIds[0])
     expect(drawn).toMatchObject({ left: 10, top: 10, width: 100, height: 70 })
     // Layout is a node field, not a CSS string in styles.
-    expect(drawn?.layout).toBe(DEFAULT_FRAME_LAYOUT)
+    expect(drawn?.layout).toBe('none')
     expect(drawn?.styles).toEqual({})
   })
 
@@ -324,11 +322,10 @@ describe('Workspace', () => {
     expect(parentNode.querySelector('.workspace__ghost')).toBeNull()
   })
 
-  it('seeds the chosen layout alongside the drawn geometry', async () => {
+  it('seeds the armed tool’s layout alongside the drawn geometry', async () => {
     const wrapper = mount(BuilderWorkspace, { attachTo: document.body })
 
-    frameLayout.value = 'flex'
-    arm('frame')
+    arm('flex')
     await drag(wrapper.element, { x: 0, y: 0 }, { x: 100, y: 50 })
 
     const drawn = getNode(viewport.value.childrenIds[0])
