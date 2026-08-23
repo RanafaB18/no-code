@@ -151,7 +151,8 @@ const TOOL_LABEL: Record<NodeLayout, string> = {
  * actually care about — the tool is just how you ask for one.
  */
 export async function armFrame(page: Page, layout: NodeLayout = 'none') {
-  await page.getByRole('button', { name: TOOL_LABEL[layout], exact: false }).click()
+  await page.locator('.tool-menu__trigger').click()
+  await page.getByRole('menuitemradio', { name: TOOL_LABEL[layout], exact: false }).click()
 }
 
 /** Draws a box, arming the tool first — one draw disarms it again. */

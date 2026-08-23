@@ -8,7 +8,7 @@ describe('App', () => {
     const wrapper = mount(App)
 
     expect(wrapper.find('.workspace').exists()).toBe(true)
-    expect(wrapper.find('.toolbar__button').exists()).toBe(true)
+    expect(wrapper.find('.tool-menu__trigger').exists()).toBe(true)
     expect(wrapper.text()).toContain('Inspector')
   })
 

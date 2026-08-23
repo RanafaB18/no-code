@@ -55,7 +55,7 @@ test.describe('Deletion', () => {
     // Focus a real control inside a real panel. The old tag list matched
     // only input/textarea/select, so this button was fair game and
     // Backspace here would have deleted the frame just drawn.
-    await page.locator('.toolbar__button').first().focus()
+    await page.locator('.tool-menu__trigger').focus()
     await page.keyboard.press('Backspace')
 
     await expect(rootChildren(page)).toHaveCount(1)

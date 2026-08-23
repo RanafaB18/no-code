@@ -1,7 +1,6 @@
 <script setup lang="ts">
 import ThemeToggle from '@/components/ThemeToggle.vue'
-import ToolButton from '@/components/ToolButton.vue'
-import { TOOLS, useTools } from '@/composables/useTools'
+import ToolMenu from '@/components/ToolMenu.vue'
 
 /**
  * The docked bar across the top of the builder: what to draw on the
@@ -13,24 +12,12 @@ import { TOOLS, useTools } from '@/composables/useTools'
  * control has focus. Backspace on a tool button is not a request to
  * delete the selection. See `useCanvasShortcuts`.
  */
-const { activeToolId, toggle } = useTools()
 </script>
 
 <template>
   <header class="topbar" data-shortcut-boundary>
-    <div class="topbar__group" role="group" aria-label="Element tools">
-      <!-- Rendered from TOOLS, so a new tool appears by adding one entry.
-           aria-pressed rather than a radiogroup: a tool can be toggled off
-           entirely, leaving idle/select mode, which radios can't express. -->
-      <ToolButton
-        v-for="tool in TOOLS"
-        :key="tool.id"
-        :label="tool.label"
-        :shortcut="tool.shortcut"
-        :active="activeToolId === tool.id"
-        :title="`${tool.label} (${tool.shortcut})`"
-        @click="toggle(tool.id)"
-      />
+    <div class="topbar__group">
+      <ToolMenu />
     </div>
 
     <div class="topbar__group topbar__group--center">

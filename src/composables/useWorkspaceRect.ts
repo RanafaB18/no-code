@@ -1,4 +1,4 @@
-import { computed, onMounted, onUnmounted, ref, type Ref } from 'vue'
+import { computed, onMounted, onUnmounted, ref, shallowRef, type Ref } from 'vue'
 import { useEventListener } from '@vueuse/core'
 
 import { onResizeFrame, viewportHeight, viewportWidth } from './useViewport'
@@ -51,7 +51,16 @@ export function toWorkspacePoint(point: ViewPoint): ViewPoint {
   }
 }
 
-let element: HTMLElement | null = null
+/**
+ * The canvas element itself.
+ *
+ * Exposed because chrome outside the canvas sometimes has to hand focus
+ * back to it — the canvas is where Escape, Delete and the tool shortcuts
+ * are live, and every panel is a `data-shortcut-boundary` where they are
+ * deliberately not. `shallowRef`, since this is a DOM node and there is
+ * nothing inside it worth making reactive.
+ */
+export const workspaceElement = shallowRef<HTMLElement | null>(null)
 
 /**
  * Reads the cell's box into the refs above.
@@ -64,6 +73,7 @@ let element: HTMLElement | null = null
  * the cell's origin also changes its size, which the observer below sees.
  */
 export function measureWorkspace(): void {
+  const element = workspaceElement.value
   if (!element) return
   const box = element.getBoundingClientRect()
   workspaceOrigin.value = { x: box.left, y: box.top }
@@ -83,22 +93,22 @@ export function useWorkspaceRect(target: Ref<HTMLElement | null>): void {
   let observer: ResizeObserver | null = null
 
   onMounted(() => {
-    element = target.value
+    workspaceElement.value = target.value
     measureWorkspace()
 
     // jsdom has no ResizeObserver, and no layout for one to report on.
-    if (typeof ResizeObserver === 'undefined' || !element) return
+    if (typeof ResizeObserver === 'undefined' || !workspaceElement.value) return
 
     // Throttled for the same reason as the window listener: this measures
     // the element and everything downstream of it re-measures in turn.
     observer = new ResizeObserver(onResizeFrame(measureWorkspace))
-    observer.observe(element)
+    observer.observe(workspaceElement.value)
   })
 
   onUnmounted(() => {
     observer?.disconnect()
     observer = null
-    element = null
+    workspaceElement.value = null
     // Reset, so an isolated remount in a test starts from a known origin
     // rather than inheriting the last one measured.
     workspaceOrigin.value = { x: 0, y: 0 }
