@@ -109,6 +109,29 @@ test.describe('Docked shell', () => {
     })
   })
 
+  test('re-measures the canvas when a rail resizes, not just the window', async ({ page }) => {
+    // The window listener the workspace already had cannot see this: a
+    // rail changing width reshapes the canvas with the window untouched,
+    // so only the ResizeObserver on the canvas element catches it.
+    //
+    // "Fit" is what this asserts on, and deliberately the only thing. The
+    // overlays drawn on the canvas — the selection frame and its handles —
+    // are positioned relative to the canvas element, so a rail widening
+    // carries them along without anything having to re-measure. Asserting
+    // on those would be asserting on something that cannot break.
+    await page
+      .locator('.shell')
+      .evaluate((shell) => (shell as HTMLElement).style.setProperty('--rail-left', '24rem'))
+    // The re-measure is throttled to a frame.
+    await page.waitForTimeout(120)
+
+    await page.getByText('Fit', { exact: true }).click()
+
+    const cell = await workspaceBox(page)
+    const fitted = await rectOf(page.locator(VIEWPORT))
+    expectNear(fitted.x + fitted.width / 2, cell.x + cell.width / 2, 'refitted centre x')
+  })
+
   test('the layers tree selects the frame it names', async ({ page }) => {
     const viewport = await rectOf(page.locator(VIEWPORT))
     const origin = { x: viewport.x + 120, y: viewport.y + 180 }

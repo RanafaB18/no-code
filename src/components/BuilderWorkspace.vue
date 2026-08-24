@@ -21,7 +21,7 @@ import {
   type ViewPoint,
 } from '@/composables/useCanvasView'
 import { onResizeFrame } from '@/composables/useViewport'
-import { toWorkspacePoint, useWorkspaceRect, workspaceRect } from '@/composables/useWorkspaceRect'
+import { toWorkspacePoint, useWorkspaceRect } from '@/composables/useWorkspaceRect'
 import { SHORTCUT_BOUNDARY, useCanvasShortcuts } from '@/composables/useCanvasShortcuts'
 import { useTools } from '@/composables/useTools'
 import {
@@ -232,12 +232,11 @@ watch([selectedId, selectedNode], measureSelection, {
 // resize fires continuously while a window edge is dragged.
 useEventListener(window, 'resize', onResizeFrame(measureSelection))
 
-// The canvas cell can also resize without the window doing so — a rail
-// collapsing or widening — which reflows the design inside it just the
-// same. Kept alongside the window listener rather than replacing it: that
-// one still covers a reflow the cell's own size never registers, like a
-// late-loading font.
-watch(workspaceRect, onResizeFrame(measureSelection), { flush: 'post' })
+// Deliberately no watcher on the canvas cell's own size. A rail widening
+// moves the whole canvas, but every overlay here is measured *relative to
+// it* — so nothing they depend on has changed, and re-measuring would
+// produce the numbers already on screen. What does have to react is the
+// cell's origin and size themselves, which  observes.
 
 // Panning or zooming moves every node's on-screen box without moving the
 // node itself — `measureSelection` reads real rendered pixels, so without
