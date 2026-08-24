@@ -23,6 +23,9 @@ import {
  * back to assuming they still are. Each was confirmed to fail — by half
  * the offset, or by the rail's full width — before its fix landed.
  */
+/** The gap the selection frame leaves around the element — SELECTION_GAP. */
+const SELECTION_GAP = 4
+
 test.describe('Docked shell', () => {
   test.beforeEach(async ({ page }) => openBuilder(page))
 
@@ -104,6 +107,21 @@ test.describe('Docked shell', () => {
       y: origin.y,
       ...size,
     })
+  })
+
+  test('the layers tree selects the frame it names', async ({ page }) => {
+    const viewport = await rectOf(page.locator(VIEWPORT))
+    const origin = { x: viewport.x + 120, y: viewport.y + 180 }
+    await drawFrame(page, origin, { width: 300, height: 200 }, 'flex')
+    // Drawing selects what it drew, so select something else first.
+    await page.getByRole('button', { name: 'Page', exact: true }).click()
+
+    await page.getByRole('button', { name: 'Flex', exact: true }).click()
+
+    // The selection frame is drawn on the canvas from a live measurement,
+    // so its box is proof the canvas agrees with the tree.
+    const selection = await rectOf(page.locator('.workspace__selection'))
+    expectBox(selection, { width: 300 + SELECTION_GAP * 2, height: 200 + SELECTION_GAP * 2 })
   })
 
   test('a keystroke in the sidebar never reaches the canvas', async ({ page }) => {

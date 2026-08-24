@@ -1,6 +1,6 @@
 import { computed, ref } from 'vue'
 
-import type { ElementType, NodeInit } from './useCanvasNodes'
+import type { ElementType, NodeInit, NodeLayout } from './useCanvasNodes'
 
 export interface Tool {
   /**
@@ -72,6 +72,17 @@ export const TOOLS = [
     seedInit: (): NodeInit => ({ layout: 'grid' }),
   },
 ] as const satisfies readonly Tool[]
+
+/**
+ * What to call a frame with a given layout.
+ *
+ * Derived from the registry rather than written out again: a layer in the
+ * tree should be named after the tool that draws it, and two hand-written
+ * lists would eventually disagree about that.
+ */
+export const LAYOUT_LABEL = Object.fromEntries(
+  TOOLS.map((tool) => [tool.seedInit().layout, tool.label]),
+) as Record<NodeLayout, string>
 
 /**
  * A tool as it appears in the registry, with `id` still narrowed to its

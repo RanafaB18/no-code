@@ -1,20 +1,29 @@
 <script setup lang="ts">
 import { ref, useTemplateRef } from 'vue'
 
-/**
- * `empty` is what the tab shows until it has something to show.
- *
- * Pages and Assets have no model behind them at all yet, and say so
- * rather than displaying invented content — a tab that lies about being
- * implemented is worse than one that admits it isn't.
- */
-const TABS = [
-  { id: 'pages', label: 'Pages', empty: 'This document has one page.' },
-  { id: 'layers', label: 'Layers', empty: 'Draw something to see it here.' },
-  { id: 'assets', label: 'Assets', empty: 'No assets yet.' },
-] as const
+import LayersPanel from '@/components/LayersPanel.vue'
 
-type TabId = (typeof TABS)[number]['id']
+type TabId = 'pages' | 'layers' | 'assets'
+
+interface Tab {
+  id: TabId
+  label: string
+  /**
+   * Stands in for a panel that has nothing behind it yet.
+   *
+   * Pages and Assets have no model at all, and say so rather than
+   * displaying invented content — a tab that pretends to be implemented
+   * is worse than one that admits it isn't. Layers has no `empty`
+   * because it never is: the document always has a page.
+   */
+  empty?: string
+}
+
+const TABS: readonly Tab[] = [
+  { id: 'pages', label: 'Pages', empty: 'This document has one page.' },
+  { id: 'layers', label: 'Layers' },
+  { id: 'assets', label: 'Assets', empty: 'No assets yet.' },
+]
 
 /**
  * The docked rail down the left of the builder.
@@ -83,7 +92,8 @@ function onKeydown(event: KeyboardEvent, index: number) {
       role="tabpanel"
       :aria-labelledby="`rail-tab-${tab.id}`"
     >
-      <p class="rail__empty">{{ tab.empty }}</p>
+      <LayersPanel v-if="tab.id === 'layers'" />
+      <p v-else class="rail__empty">{{ tab.empty }}</p>
     </div>
   </aside>
 </template>
