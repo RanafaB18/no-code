@@ -81,17 +81,32 @@ describe('useTools', () => {
   })
 
   it('seeds a gap on the frames that arrange children, and only those', () => {
-    const gapOf = (id: string) => {
-      const styles = TOOLS.find((tool) => tool.id === id)!.seedInit().styles ?? {}
-      return { ...styles }
-    }
+    const stylesOf = (id: string) => TOOLS.find((tool) => tool.id === id)!.seedInit().styles ?? {}
 
     // Flex takes the shorthand; a grid sets its two axes separately.
-    expect(gapOf('flex')).toMatchObject({ gap: '10px' })
-    expect(gapOf('grid')).toMatchObject({ columnGap: '10px', rowGap: '10px' })
+    expect(stylesOf('flex')).toMatchObject({ gap: '10px' })
+    expect(stylesOf('grid')).toMatchObject({ columnGap: '10px', rowGap: '10px' })
     // A frame with no layout has no gap to speak of, and the inspector
     // hides the row — seeding one would be an invisible style.
-    expect(gapOf('frame')).toEqual({})
+    expect(stylesOf('frame')).not.toHaveProperty('gap')
+  })
+
+  it('fills the frames you can actually see, and not the ones you cannot', () => {
+    const stylesOf = (id: string) => TOOLS.find((tool) => tool.id === id)!.seedInit().styles ?? {}
+
+    // A plain frame carries the colour itself, having no children to
+    // carry it. A container leaves it to its children: filled as well, the
+    // gaps between them would show its own fill and the whole thing would
+    // read as one solid block.
+    expect(stylesOf('frame')).toMatchObject({ backgroundColor: '#bbddff' })
+    expect(stylesOf('flex')).not.toHaveProperty('backgroundColor')
+    expect(stylesOf('grid')).not.toHaveProperty('backgroundColor')
+
+    for (const tool of TOOLS) {
+      for (const child of tool.seedChildren()) {
+        expect(child.styles).toMatchObject({ backgroundColor: '#bbddff' })
+      }
+    }
   })
 
   it('offers a tool for every layout a frame can have', () => {

@@ -1,8 +1,9 @@
-import { expect, test } from '@playwright/test'
+import { expect, test, type Locator } from '@playwright/test'
 
 import {
   VIEWPORT,
   childrenOf,
+  dragBy,
   drawContainer,
   drawFrame,
   expectBox,
@@ -210,6 +211,103 @@ test.describe('Layout', () => {
       const spanned = await rectOf(children.nth(0))
       // Both cells plus the gap that had been between them.
       expectBox(spanned, { width: single.width * 2 + GAP })
+    })
+
+    /** #bbddff, as a browser reports a painted background. */
+    const FILL = 'rgb(187, 221, 255)'
+    /** How a browser reports no background at all. */
+    const UNFILLED = 'rgba(0, 0, 0, 0)'
+
+    function paintOf(locator: Locator) {
+      return locator.evaluate((el) => getComputedStyle(el).backgroundColor)
+    }
+
+    test('a drawn frame is painted, not an outline around nothing', async ({ page }) => {
+      const viewport = await rectOf(page.locator(VIEWPORT))
+      await drawFrame(page, { x: viewport.x + 80, y: viewport.y + 120 }, { width: 300, height: 200 })
+
+      expect(await paintOf(rootChildren(page).first())).toBe(FILL)
+    })
+
+    test('a container leaves the paint to its children', async ({ page }) => {
+      // Filled as well, its own colour would show through every gap and
+      // the whole thing would read as one solid block.
+      const viewport = await rectOf(page.locator(VIEWPORT))
+      await drawFrame(
+        page,
+        { x: viewport.x + 80, y: viewport.y + 120 },
+        { width: 400, height: 200 },
+        'flex',
+      )
+
+      const container = rootChildren(page).first()
+      expect(await paintOf(container)).toBe(UNFILLED)
+
+      const children = childrenOf(container)
+      expect(await paintOf(children.nth(0))).toBe(FILL)
+      expect(await paintOf(children.nth(1))).toBe(FILL)
+    })
+
+    test('a frame dragged wholly inside a flex row joins it', async ({ page }) => {
+      // The same containment rule drawing uses, so dragging a frame into a
+      // row and drawing one there put it in the same place.
+      const viewport = await rectOf(page.locator(VIEWPORT))
+      await drawFrame(
+        page,
+        { x: viewport.x + 80, y: viewport.y + 120 },
+        { width: 400, height: 200 },
+        'flex',
+      )
+      await drawFrame(page, { x: viewport.x + 80, y: viewport.y + 500 }, { width: 90, height: 60 })
+
+      const row = rootChildren(page).first()
+      const flex = await rectOf(row)
+      const loose = await rectOf(rootChildren(page).nth(1))
+
+      await dragBy(
+        page,
+        { x: loose.x + 45, y: loose.y + 30 },
+        flex.x + 200 - (loose.x + 45),
+        flex.y + 100 - (loose.y + 30),
+      )
+
+      // Off the page's children and into the row, between the two seeded.
+      await expect(rootChildren(page)).toHaveCount(1)
+      await expect(childrenOf(row)).toHaveCount(3)
+      expectBox(await rectOf(childrenOf(row).nth(1)), { width: 90, height: 60 })
+    })
+
+    test('a frame dragged out of a row lands on the page where it was dropped', async ({
+      page,
+    }) => {
+      // A frame the row places follows the pointer by a transform rather
+      // than by moving for real — its slot stays reserved behind it and its
+      // siblings hold still, which is what lets it be dragged clear at all.
+      const viewport = await rectOf(page.locator(VIEWPORT))
+      await drawFrame(
+        page,
+        { x: viewport.x + 80, y: viewport.y + 120 },
+        { width: 400, height: 200 },
+        'flex',
+      )
+
+      const row = rootChildren(page).first()
+      const cell = await rectOf(childrenOf(row).first())
+
+      await dragBy(page, { x: cell.x + 40, y: cell.y + 40 }, 0, 400)
+
+      await expect(childrenOf(row)).toHaveCount(1)
+      await expect(rootChildren(page)).toHaveCount(2)
+
+      // Dropped 400px below where it started, at the size the row had
+      // given it: `fill` is a grant from the row, so leaving states the
+      // size rather than collapsing to nothing without it.
+      expectBox(await rectOf(rootChildren(page).nth(1)), {
+        x: cell.x,
+        y: cell.y + 400,
+        width: cell.width,
+        height: cell.height,
+      })
     })
 
     test('a plain frame still comes empty', async ({ page }) => {

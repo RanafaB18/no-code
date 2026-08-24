@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 
-import { toStyleBinding } from '@/composables/styleSchema'
+import { isStyleSet, toStyleBinding } from '@/composables/styleSchema'
+import { dragOffset, draggingId } from '@/composables/useCanvasDrag'
 import {
   getNode,
   isViewport,
@@ -27,6 +28,21 @@ const props = defineProps<{ nodeId: NodeId }>()
 
 /** O(1), and reactive to this key alone. */
 const node = computed(() => getNode(props.nodeId))
+
+/**
+ * A frame with nothing to paint, which the editor has to outline or it
+ * would not be there to click at all.
+ *
+ * Only these: a frame that paints itself needs no help being seen, and an
+ * outline it never asked for is a border in the design that is not in the
+ * design. The viewport is filled by the editor rather than by a style of
+ * its own, so it counts as painted.
+ */
+const unfilled = computed(() => {
+  const current = node.value
+  if (!current || isViewport(current.id)) return false
+  return !isStyleSet(current, 'backgroundColor')
+})
 
 function px(value: number | undefined) {
   return value === undefined ? undefined : `${value}px`
@@ -141,6 +157,30 @@ function displayFor(current: CanvasNode) {
   return current.layout === 'none' ? undefined : current.layout
 }
 
+/** True while this is the frame being dragged. */
+const dragging = computed(() => node.value !== undefined && draggingId.value === props.nodeId)
+
+/**
+ * The visual offset a dragged frame follows the pointer by.
+ *
+ * A transform rather than a real move, and only for a frame its parent
+ * places: writing offsets would do nothing to it (the parent decides
+ * where it goes), while removing it from the flow mid-drag would reflow
+ * its siblings out from under the pointer. A transform leaves its slot
+ * reserved and its siblings still, which is also what makes the faded
+ * placeholder behind it read as "where this came from".
+ *
+ * A frame that positions itself is moved by writing its offsets instead,
+ * so it needs none of this.
+ */
+const dragTransform = computed(() => {
+  const current = node.value
+  if (!current || !dragging.value || resolvedPosition(current) === 'absolute') return undefined
+
+  const { x, y } = dragOffset.value
+  return `translate(${x}px, ${y}px)`
+})
+
 const binding = computed(() => {
   const current = node.value
   if (!current) return {}
@@ -155,6 +195,7 @@ const binding = computed(() => {
     // search, so its absolute children would escape and position against
     // a distant ancestor instead of it.
     position: resolvedPosition(current),
+    transform: dragTransform.value,
   }
 })
 </script>
@@ -168,7 +209,11 @@ const binding = computed(() => {
   <div
     v-if="node"
     class="canvas-node"
-    :class="{ 'canvas-node--viewport': isViewport(nodeId) }"
+    :class="{
+      'canvas-node--viewport': isViewport(nodeId),
+      'canvas-node--unfilled': unfilled,
+      'canvas-node--dragging': dragging,
+    }"
     :data-node-id="nodeId"
     :style="binding"
   >
@@ -177,10 +222,15 @@ const binding = computed(() => {
 </template>
 
 <style scoped>
-.canvas-node {
-  /* A node with no background is invisible despite having size, so the
-     editor outlines it. An editor affordance, deliberately not part of the
-     node's own styles, so it never leaks into the CSS being authored. */
+/* A node with no background is invisible despite having size, so the
+   editor outlines it — dashed, because it is an editor affordance and not
+   a border anyone asked for. Deliberately not part of the node's own
+   styles, so it never leaks into the CSS being authored.
+
+   Only the unpainted ones: a frame that fills itself is already something
+   to see, and outlining it too would put a line in the design that is not
+   in the design. */
+.canvas-node--unfilled {
   outline: 1px dashed var(--color-border);
   outline-offset: -1px;
 }
@@ -202,9 +252,18 @@ const binding = computed(() => {
  * browser to lay anything out.
  */
 
-/* The page being designed, against the surrounding canvas. */
+/* Translucent while it is being dragged, so what it is being dragged
+   over stays readable underneath it. */
+.canvas-node--dragging {
+  opacity: 0.7;
+}
+
+/* The page being designed, against the surrounding canvas. Solid rather
+   than dashed: this edge is where the page really ends, not an editor
+   guess at where an invisible box is. */
 .canvas-node--viewport {
   background-color: var(--color-surface-raised);
-  outline-color: var(--color-border-strong);
+  outline: 1px solid var(--color-border-strong);
+  outline-offset: -1px;
 }
 </style>

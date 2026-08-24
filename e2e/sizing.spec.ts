@@ -2,6 +2,7 @@ import { expect, test } from '@playwright/test'
 
 import {
   VIEWPORT,
+  SELECTION_GAP,
   addProperty,
   childrenOf,
   dragBy,
@@ -167,7 +168,7 @@ test.describe('Sizing modes', () => {
 
     // Dragging an edge states a size in pixels, so the axis stops filling
     // — starting from what it was actually measuring, not from nothing.
-    await dragBy(page, { x: filled.x + filled.width + 4, y: filled.y + filled.height / 2 }, -100, 0)
+    await dragBy(page, { x: filled.x + filled.width + SELECTION_GAP, y: filled.y + filled.height / 2 }, -100, 0)
 
     await expect(page.locator('#field-widthMode')).toHaveValue('fixed')
     expectBox(await rectOf(child), { width: filled.width - 100 })

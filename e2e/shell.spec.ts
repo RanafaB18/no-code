@@ -2,6 +2,7 @@ import { expect, test } from '@playwright/test'
 
 import {
   VIEWPORT,
+  SELECTION_GAP,
   canvasPoint,
   drawFrame,
   expectBox,
@@ -23,9 +24,6 @@ import {
  * back to assuming they still are. Each was confirmed to fail — by half
  * the offset, or by the rail's full width — before its fix landed.
  */
-/** The gap the selection frame leaves around the element — SELECTION_GAP. */
-const SELECTION_GAP = 4
-
 test.describe('Docked shell', () => {
   test.beforeEach(async ({ page }) => openBuilder(page))
 

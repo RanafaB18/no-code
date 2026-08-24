@@ -2,6 +2,7 @@ import { expect, test } from '@playwright/test'
 
 import {
   VIEWPORT,
+  SELECTION_GAP,
   childrenOf,
   dragBy,
   drawContainer,
@@ -13,9 +14,6 @@ import {
   rootChildren,
   zoomTo,
 } from './canvas'
-
-/** How far outside an element its selection frame — and so its grips — sits. */
-const SELECTION_GAP = 4
 
 test.describe('Move and resize', () => {
   test.beforeEach(({ page }) => openBuilder(page))
@@ -190,7 +188,7 @@ test.describe('Move and resize', () => {
     await page.mouse.move(before.x + before.width + 100, before.y + before.height + 100, {
       steps: 8,
     })
-    expectBox(await rectOf(frame), { width: before.width + 96, height: before.height + 96 })
+    expectBox(await rectOf(frame), { width: before.width + 100, height: before.height + 100 })
 
     await page.keyboard.press('Escape')
     await page.mouse.up()

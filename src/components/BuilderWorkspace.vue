@@ -10,6 +10,7 @@ import {
   toLocal,
   type Rect,
 } from '@/composables/nodeMeasure'
+import { beginDrag, dragOffset, draggingId, endDrag } from '@/composables/useCanvasDrag'
 import {
   canvasTransform,
   pan,
@@ -175,25 +176,41 @@ function measureSelection() {
 /**
  * Gap, in px, between the element's true edge and the drawn frame.
  *
- * `selectionRect` stays an honest measurement of the element itself — the
- * resize handles work from pointer deltas against the node's own stored
- * box, not against the frame — so the gap is applied only where the frame
- * is rendered.
+ * Zero: the frame sits exactly on the edge it is reporting, so what is
+ * highlighted is the box itself rather than a slightly larger one. An
+ * offset frame quietly misstates the element's size — which matters most
+ * on the small elements where four pixels are a visible fraction of it.
+ *
+ * Kept as a named constant rather than inlined because the resize handles
+ * are placed along this same frame, so anything that moves it moves where
+ * they can be grabbed.
  */
-const SELECTION_GAP = 4
-
-const selectionFrameStyle = computed(() => frameStyle(selectionRect.value, SELECTION_GAP))
+const SELECTION_GAP = 0
 
 /**
- * The frame a new element will be nested into, resolved once when the
- * drag begins.
+ * Hidden while a frame is being dragged.
  *
- * Resolved at pointerdown rather than tracked live because
- * `setPointerCapture` retargets every later pointer event to the capture
- * element — `event.target` on pointermove would always be the workspace
- * root, so live `closest()` tracking cannot work. Pressing to choose the
- * parent also matches the existing rule that a drag's position is
- * ignored and only its size is used.
+ * The frame is measured from the element, and a dragged frame follows the
+ * pointer without the measurement being redone — so it would sit at the
+ * origin with its handles around empty space. There is nothing useful to
+ * show anyway: what matters mid-drag is where the frame will land, which
+ * the drop-target border and the insertion line say. A resize keeps it,
+ * since that is the gesture the handles belong to.
+ */
+const selectionFrameStyle = computed(() =>
+  draggingId.value === null ? frameStyle(selectionRect.value, SELECTION_GAP) : null,
+)
+
+/**
+ * The frame a new element will be nested into, re-resolved as the drag
+ * grows.
+ *
+ * Tracked live rather than fixed at pointerdown, because the answer
+ * depends on the whole drawn rectangle and not on where it started —
+ * see `frameContaining`. That also sidesteps what forced the old
+ * pointerdown-only rule: `setPointerCapture` retargets every later event
+ * to the capture element, so `event.target` on pointermove is always the
+ * workspace root and `closest()` can tell you nothing.
  *
  * The node is kept alongside the id because the ghost teleports into it.
  */
@@ -204,8 +221,154 @@ const dropRect = ref<Rect | null>(null)
 /** Drawn flush, so it reads as an inner fill inside any selection frame. */
 const dropFrameStyle = computed(() => frameStyle(dropRect.value, 0))
 
-/** The innermost element under the pointer, or null for bare workspace. */
-function resolveDropTarget(event: PointerEvent): HTMLElement | null {
+/**
+ * Where a dragged frame started, so the slot it is leaving stays visible
+ * behind it. Cleared the moment the gesture ends, either way.
+ */
+const dragOriginRect = ref<Rect | null>(null)
+
+const dragOriginStyle = computed(() => frameStyle(dragOriginRect.value, 0))
+
+/**
+ * The line marking where a dragged frame will be inserted among the
+ * receiving frame's children, in workspace px.
+ *
+ * Only for a frame that lays its children out: order is what the line is
+ * about, and a frame that positions its children has none to show.
+ */
+const insertionStyle = ref<Record<string, string> | null>(null)
+
+/** How far the line overshoots the siblings it sits between, in px. */
+const INSERTION_OVERSHOOT = 4
+
+/**
+ * Works out that line from the boxes either side of the insertion point.
+ *
+ * Reading the siblings rather than the parent's `flex-direction` so one
+ * rule covers a row, a column and a grid alike: whichever way the two
+ * neighbours are separated is the way the frames flow, and the line is
+ * drawn across it. With only one neighbour there is nothing to compare,
+ * so the line goes on its near or far edge as the index demands and takes
+ * that box's own proportions for its length.
+ */
+function insertionLine(
+  parent: CanvasNode,
+  movingId: NodeId,
+  index: number,
+): Record<string, string> | null {
+  const siblings = parent.childrenIds
+    .filter((id) => id !== movingId)
+    .map((id) => measureRect(id))
+    .filter((rect): rect is Rect => rect !== null)
+
+  const before = siblings[index - 1] ?? null
+  const after = siblings[index] ?? null
+  if (!before && !after) return null
+
+  const anchor = (before ?? after)!
+  const other = before && after ? after : null
+
+  // Side by side when the gap between them is wider than it is tall.
+  const horizontal = other
+    ? Math.abs(other.left - anchor.left) >= Math.abs(other.top - anchor.top)
+    : anchor.width >= anchor.height
+
+  const span = (rect: Rect) => ({
+    top: Math.min(rect.top, anchor.top) - INSERTION_OVERSHOOT,
+    height: Math.max(rect.height, anchor.height) + INSERTION_OVERSHOOT * 2,
+  })
+
+  if (horizontal) {
+    const x = before && after ? (before.left + before.width + after.left) / 2 : null
+    const left = x ?? (after ? after.left : anchor.left + anchor.width)
+    const { top, height } = span(other ?? anchor)
+    return { left: `${left}px`, top: `${top}px`, height: `${height}px` }
+  }
+
+  const y = before && after ? (before.top + before.height + after.top) / 2 : null
+  const top = y ?? (after ? after.top : anchor.top + anchor.height)
+  const left = Math.min((other ?? anchor).left, anchor.left) - INSERTION_OVERSHOOT
+  const width = Math.max((other ?? anchor).width, anchor.width) + INSERTION_OVERSHOOT * 2
+  return { left: `${left}px`, top: `${top}px`, width: `${width}px` }
+}
+
+/** True when `rect` (client px) fits entirely within the element's box. */
+function encloses(element: HTMLElement, rect: Rect): boolean {
+  const box = element.getBoundingClientRect()
+  return (
+    rect.left >= box.left &&
+    rect.top >= box.top &&
+    rect.left + rect.width <= box.right &&
+    rect.top + rect.height <= box.bottom
+  )
+}
+
+/**
+ * The innermost frame that entirely contains `rect`, or null for bare
+ * canvas.
+ *
+ * Containment rather than what sits under the pointer, which is what lets
+ * one gesture mean two things without a modifier: a box drawn wholly
+ * inside a frame goes into it, and the same box drawn so that it crosses
+ * that frame's edge is not inside it any more, so it lands beside it
+ * instead. Drawn across two children of a row, it belongs to neither and
+ * joins the row as their sibling.
+ *
+ * That distinction is load-bearing now that the Flex and Grid tools seed
+ * children which tile their parent completely: under a pointer rule there
+ * would be nowhere left to press that meant "add another one".
+ *
+ * Last child first, because later siblings paint over earlier ones — the
+ * same rule the eye is applying while it watches.
+ */
+function frameContaining(rect: Rect, skipId: NodeId | null = null): HTMLElement | null {
+  const root = nodeElement(VIEWPORT_ID)
+  if (!root || !encloses(root, rect)) return null
+
+  let element = root
+  let id: NodeId = VIEWPORT_ID
+
+  descend: for (;;) {
+    const children = getNode(id)?.childrenIds ?? []
+
+    for (let i = children.length - 1; i >= 0; i -= 1) {
+      const childId = children[i]!
+      // A node being moved cannot land inside itself, and skipping it
+      // takes its whole subtree with it — the descent never gets past it.
+      if (childId === skipId) continue
+
+      const child = nodeElement(childId)
+      if (child && encloses(child, rect)) {
+        id = childId
+        element = child
+        continue descend
+      }
+    }
+
+    return element
+  }
+}
+
+/**
+ * Re-resolves what the drag is currently over. Called as the pointer
+ * moves, not once at the start: the answer depends on the whole drawn
+ * rectangle, which is not known until the drag ends.
+ */
+function updateDropTarget() {
+  const rect = dragRect.value
+  const target = rect && activeTool.value ? frameContaining(rect) : null
+
+  dropTargetNode.value = target
+  dropTargetId.value = target?.dataset.nodeId ?? null
+
+  // The page is a legitimate target but never a highlighted one: outlining
+  // the whole page says nothing you could not already see, and the ghost
+  // sitting on bare page says where the element is going by itself.
+  dropRect.value = isViewport(dropTargetId.value) ? null : measureRect(dropTargetId.value)
+}
+
+/** The innermost element under the pointer — for selecting, not drawing. */
+function elementUnder(event: PointerEvent): HTMLElement | null {
   const target = event.target
   if (!(target instanceof Element)) return null
   // `closest` walks ancestor-or-self, so the innermost frame wins for free.
@@ -499,6 +662,34 @@ const ghostStyle = computed(() => {
   }
 })
 
+/**
+ * The size being drawn, in canvas units — the number that will be stored,
+ * not the pixels currently on screen, so it stays the same at every zoom.
+ */
+const ghostLabel = computed(() => {
+  const geometry = geometryFor(dropTargetNode.value)
+  if (!geometry) return null
+  return `${Math.round(geometry.width)} × ${Math.round(geometry.height)}`
+})
+
+/** Clear space between the drawn box and the readout below it, in px. */
+const GHOST_LABEL_GAP = 6
+
+/**
+ * Where that readout sits, in workspace pixels.
+ *
+ * Rendered outside the canvas layer, unlike the ghost it belongs to: this
+ * is a readout rather than part of the drawing, so it has to stay its own
+ * size and the right way up however far the canvas is zoomed.
+ */
+const ghostLabelStyle = computed(() => {
+  const rect = dragRect.value
+  if (!rect || !ghostLabel.value) return null
+
+  const corner = toWorkspacePoint({ x: rect.left + rect.width, y: rect.top + rect.height })
+  return { left: `${corner.x}px`, top: `${corner.y + GHOST_LABEL_GAP}px` }
+})
+
 function clearDrag() {
   dragOrigin.value = null
   dragCurrent.value = null
@@ -552,6 +743,26 @@ interface Transform {
 }
 
 let transform: Transform | null = null
+
+/**
+ * The dragged frame's box when the gesture began, in client px.
+ *
+ * Where it is *now* is this plus the pointer's travel, computed rather
+ * than measured: a frame its parent places follows the pointer by a
+ * transform Vue has not applied yet at the moment the pointer moves, so
+ * measuring would answer for the previous frame of the drag.
+ */
+let dragOriginClient: Rect | null = null
+
+/** Where the dragged frame has got to, in client px. */
+function draggedRect(dx: number, dy: number): Rect | null {
+  if (!dragOriginClient) return null
+  return {
+    ...dragOriginClient,
+    left: dragOriginClient.left + dx,
+    top: dragOriginClient.top + dy,
+  }
+}
 
 /**
  * Below this a resize would be smaller than it is selectable, and a
@@ -645,6 +856,18 @@ function beginTransform(event: PointerEvent, nodeId: NodeId, edges: readonly Edg
     top: node.pinTop ? (node.top ?? measured?.top ?? 0) : (measured?.top ?? 0),
     width: startSize(node, measured, 'width'),
     height: startSize(node, measured, 'height'),
+  }
+
+  if (isMove) {
+    beginDrag(nodeId)
+    // Measured before anything moves, so the placeholder marks the slot
+    // the frame is leaving rather than wherever it has got to since.
+    dragOriginRect.value = measureRect(nodeId)
+
+    const box = nodeElement(nodeId)?.getBoundingClientRect()
+    dragOriginClient = box
+      ? { left: box.left, top: box.top, width: box.width, height: box.height }
+      : null
   }
 
   transform = {
@@ -777,13 +1000,14 @@ function resizeGeometry(active: Transform, dx: number, dy: number): NodeGeometry
  * an in-flow move changes nothing until release — nothing has shifted
  * under us in between.
  */
-function insertionIndex(node: CanvasNode, point: { x: number; y: number }): number {
-  const parent = getNode(node.parentId)
-  if (!parent) return 0
-
+function insertionIndex(
+  parent: CanvasNode,
+  movingId: NodeId,
+  point: { x: number; y: number },
+): number {
   let index = 0
   for (const siblingId of parent.childrenIds) {
-    if (siblingId === node.id) continue
+    if (siblingId === movingId) continue
 
     const element = nodeElement(siblingId)
     if (!element) continue
@@ -828,36 +1052,155 @@ function applyTransform(event: PointerEvent) {
   }
 
   // A move only writes offsets for a node that positions itself. An
-  // in-flow node is placed by its parent, so dragging it means reordering
-  // it among its siblings — which is settled on release, from where the
-  // pointer finally landed.
+  // in-flow node is placed by its parent, so it follows the pointer by a
+  // transform instead — its slot stays reserved behind it, which is what
+  // the placeholder marks, and its siblings hold still.
   if (active.absolute) {
     updateGeometry(active.nodeId, {
       left: active.start.left + canvasDelta.x,
       top: active.start.top + canvasDelta.y,
     })
+  } else {
+    dragOffset.value = canvasDelta
   }
+
+  updateMoveFeedback(active, draggedRect(dx, dy), { x: event.clientX, y: event.clientY })
 }
 
+/**
+ * Keeps the drop-target highlight and the insertion line current while a
+ * frame is being dragged — the move gesture's answer to the highlight
+ * drawing already shows.
+ */
+function updateMoveFeedback(active: Transform, rect: Rect | null, point: ViewPoint) {
+  if (!rect) return
+
+  const target = frameContaining(rect, active.nodeId)
+  const targetId = target?.dataset.nodeId ?? null
+
+  dropTargetNode.value = target
+  dropTargetId.value = targetId
+  dropRect.value = isViewport(targetId) ? null : measureRect(targetId)
+
+  // Only a frame that lays its children out has an order to insert into;
+  // one that lets them position themselves has nowhere to draw a line.
+  const parent = getNode(targetId)
+  insertionStyle.value =
+    parent && parent.layout !== 'none'
+      ? insertionLine(parent, active.nodeId, insertionIndex(parent, active.nodeId, point))
+      : null
+}
+
+/** Clears everything a move gesture puts on screen. */
+function clearMoveFeedback() {
+  endDrag()
+  dragOriginClient = null
+  dragOriginRect.value = null
+  insertionStyle.value = null
+  dropTargetId.value = null
+  dropTargetNode.value = null
+  dropRect.value = null
+}
+
+/**
+ * The offsets a node should carry once `parent` has taken it in.
+ *
+ * A parent that lays its children out places them itself, so the offsets
+ * are inert and are dropped rather than left behind to reappear the day
+ * the layout is switched off. Otherwise they are rebased onto the new
+ * parent, which is the whole job: they were measured against the old one
+ * and would otherwise move the node the moment it changed hands.
+ */
+function placementIn(parent: CanvasNode, node: CanvasNode, local: Rect): NodeGeometry {
+  const cleared: NodeGeometry = {
+    left: undefined,
+    top: undefined,
+    right: undefined,
+    bottom: undefined,
+    pinLeft: false,
+    pinRight: false,
+    pinTop: false,
+    pinBottom: false,
+  }
+
+  // `position: absolute` is the node's own claim and survives the move,
+  // so such a node still needs real offsets even in a flex parent.
+  const laidOut = node.position !== 'absolute' && parent.layout !== 'none'
+  if (laidOut) return cleared
+
+  return { ...cleared, left: local.left, top: local.top, pinLeft: true, pinTop: true }
+}
+
+/**
+ * Settles a finished move: which frame the node now belongs to, and where
+ * among its children it sits.
+ *
+ * The receiving frame is the innermost one that wholly contains the node
+ * where it was dropped — the same rule drawing uses, so dragging a frame
+ * into a flex row and drawing one there put it in the same place.
+ */
 function finishTransform(event: PointerEvent) {
   const active = transform
   transform = null
-  if (!active?.moved || active.edges.length > 0 || active.absolute) return
+
+  const rect = draggedRect(event.clientX - (active?.origin.x ?? 0), event.clientY - (active?.origin.y ?? 0))
+  clearMoveFeedback()
+
+  if (!active?.moved || active.edges.length > 0) return
 
   const node = getNode(active.nodeId)
-  if (!node?.parentId) return
+  if (!node?.parentId || !rect) return
 
-  const index = insertionIndex(node, { x: event.clientX, y: event.clientY })
-  // Its own index doubles as the no-op case: reinserting a node at the
-  // position it already occupies would churn two arrays for nothing.
-  const current = getNode(node.parentId)?.childrenIds.indexOf(node.id) ?? -1
-  if (index !== current) moveNode(node.id, node.parentId, index)
+  // Dropped clear of the page entirely: it still belongs to something, and
+  // the page is the only thing left.
+  const targetElement = frameContaining(rect, node.id) ?? nodeElement(VIEWPORT_ID)
+  const targetId = targetElement?.dataset.nodeId ?? VIEWPORT_ID
+  const target = getNode(targetId)
+  if (!target || !targetElement) return
+
+  const point = { x: event.clientX, y: event.clientY }
+
+  if (targetId === node.parentId) {
+    // Same parent, so this is a reorder — and only a frame the parent
+    // actually places has an order to change.
+    if (active.absolute) return
+    // Its own index doubles as the no-op case: reinserting a node at the
+    // position it already occupies would churn two arrays for nothing.
+    const current = target.childrenIds.indexOf(node.id)
+    const index = insertionIndex(target, node.id, point)
+    if (index !== current) moveNode(node.id, targetId, index)
+    return
+  }
+
+  // Measured before the move, while the old offsets still hold.
+  const local = toCanvasLocal(rect, targetElement)
+  const laidOut = node.position !== 'absolute' && target.layout !== 'none'
+
+  moveNode(node.id, targetId, insertionIndex(target, node.id, point))
+
+  // `fill` is a grant from a parent that lays the frame out. Carrying it
+  // into a parent that does not would collapse the box to nothing, so the
+  // size it is leaving with is stated before the grant disappears — the
+  // same freeze the inspector performs when a frame leaves the flow.
+  if (!laidOut) {
+    for (const axis of ['width', 'height'] as const) {
+      const mode = axis === 'width' ? node.widthMode : node.heightMode
+      if (mode !== 'fill') continue
+      // Mode first: switching it clears the number for the mode it left,
+      // so a size written before this would be undone by it.
+      updateSizeMode(node.id, axis, 'fixed')
+      updateGeometry(node.id, { [axis]: Math.round(local[axis]) })
+    }
+  }
+
+  updateGeometry(node.id, placementIn(target, node, local))
 }
 
 /** Abandons a gesture, putting back the pins it had already overwritten. */
 function cancelTransform() {
   const active = transform
   transform = null
+  clearMoveFeedback()
   if (active?.moved && (active.edges.length > 0 || active.absolute)) {
     updateGeometry(active.nodeId, active.restore)
   }
@@ -905,7 +1248,7 @@ function handlePointerDown(event: PointerEvent) {
     // click-based selector would immediately re-select the frame just
     // drawn into and discard the new element's selection. jsdom never
     // synthesises that click, so no test would have caught it.
-    const target = resolveDropTarget(event)
+    const target = elementUnder(event)
     const targetId = target?.dataset.nodeId ?? null
 
     // A press on the viewport's own empty area — not on any child, which
@@ -941,11 +1284,7 @@ function handlePointerDown(event: PointerEvent) {
 
   dragOrigin.value = { x: event.clientX, y: event.clientY }
   dragCurrent.value = { x: event.clientX, y: event.clientY }
-
-  const target = resolveDropTarget(event)
-  dropTargetNode.value = target
-  dropTargetId.value = target?.dataset.nodeId ?? null
-  dropRect.value = measureRect(dropTargetId.value)
+  updateDropTarget()
 
   capturePointer(event.pointerId)
 }
@@ -963,6 +1302,8 @@ function handlePointerMove(event: PointerEvent) {
 
   if (!dragOrigin.value) return
   dragCurrent.value = { x: event.clientX, y: event.clientY }
+  // The box has changed shape, so what encloses it may have changed too.
+  updateDropTarget()
 }
 
 function handlePointerUp(event: PointerEvent) {
@@ -1146,6 +1487,27 @@ useCanvasShortcuts({
     <div v-if="dropFrameStyle" class="workspace__drop-target" :style="dropFrameStyle" />
 
     <!--
+      The slot a dragged frame is leaving, so it stays visible behind the
+      frame itself while that follows the pointer.
+    -->
+    <div v-if="dragOriginStyle" class="workspace__drag-origin" :style="dragOriginStyle" />
+
+    <!--
+      Where a dragged frame will be inserted among its new siblings. Only
+      appears over a frame that lays its children out — see `insertionLine`.
+    -->
+    <div v-if="insertionStyle" class="workspace__insertion" :style="insertionStyle" />
+
+    <!--
+      What is being drawn, in canvas units. Outside the canvas layer on
+      purpose — see `ghostLabelStyle` — so it neither scales nor moves
+      with the zoom it is reporting a size at.
+    -->
+    <div v-if="ghostLabelStyle" class="workspace__ghost-label" :style="ghostLabelStyle">
+      {{ ghostLabel }}
+    </div>
+
+    <!--
       Selection frame: a sibling overlay, not a child of the selected
       element — see the comment on selectionRect for why. The frame itself
       stays transparent to the pointer so it never blocks a click on what
@@ -1241,10 +1603,28 @@ useCanvasShortcuts({
    `event.target` stays informative, which is what makes resolving the
    drop target possible at all. */
 
+/* A hairline and nothing else. Unfilled and undashed on purpose: this is
+   a preview of the box's bounds, and either a tint or a dashed edge would
+   be showing something the frame is not going to look like. */
 .workspace__ghost {
-  outline: 1px dashed var(--color-accent);
+  outline: 1px solid var(--color-accent);
   outline-offset: -1px;
-  background-color: color-mix(in srgb, var(--color-accent) 12%, transparent);
+  pointer-events: none;
+}
+
+/* Right-aligned with the box's own right edge, sitting just below it —
+   `left` is that corner, and the translate hangs the pill back from it. */
+.workspace__ghost-label {
+  position: absolute;
+  transform: translateX(-100%);
+  padding: 0.125rem 0.375rem;
+  font-size: 0.6875rem;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.4;
+  white-space: nowrap;
+  color: var(--color-fg-on-accent);
+  background-color: var(--color-accent);
+  border-radius: 0.25rem;
   pointer-events: none;
 }
 
@@ -1298,16 +1678,60 @@ useCanvasShortcuts({
   pointer-events: none;
 }
 
-/* Flush and filled, versus the selection frame's offset border — so an
-   element that is both selected and the drop target reads as an inner
-   highlight inside an outer frame rather than two fighting outlines.
-   The tint stays low because it paints over the frame's children too. */
+/* A border and nothing more. No tint: it would paint over the frame's own
+   children, so the frame being highlighted is the one place the colours
+   stop telling the truth — and the border alone already says which frame
+   is about to receive the element. */
 .workspace__drop-target {
   position: absolute;
-  outline: 2px solid var(--color-accent);
-  outline-offset: -2px;
-  background-color: color-mix(in srgb, var(--color-accent) 6%, transparent);
+  outline: 1px solid var(--color-accent);
+  outline-offset: -1px;
   pointer-events: none;
+}
+
+/* Faint on purpose: it marks a space rather than occupying one, and has
+   to stay quieter than the frame that is actually being dragged. */
+.workspace__drag-origin {
+  position: absolute;
+  background-color: color-mix(in srgb, var(--color-accent) 8%, transparent);
+  pointer-events: none;
+}
+
+/* A hairline with a dot at each end, sized from whichever dimension the
+   line spans — the other is left to the inline style. Both dots are drawn
+   by pseudo-elements so the line stays one element to position. */
+.workspace__insertion {
+  position: absolute;
+  z-index: 1;
+  width: 2px;
+  height: 2px;
+  background-color: var(--color-accent);
+  border-radius: 1px;
+  pointer-events: none;
+  transform: translate(-1px, -1px);
+}
+
+.workspace__insertion::before,
+.workspace__insertion::after {
+  content: '';
+  position: absolute;
+  width: 7px;
+  height: 7px;
+  background-color: var(--color-surface-raised);
+  border: 2px solid var(--color-accent);
+  border-radius: 50%;
+  /* Centred on the line's own ends, whichever way it runs. */
+  translate: -50% -50%;
+}
+
+.workspace__insertion::before {
+  top: 0;
+  left: 0;
+}
+
+.workspace__insertion::after {
+  top: 100%;
+  left: 100%;
 }
 
 /*

@@ -55,6 +55,19 @@ const GAP = '10px'
 const TRACKS = 'repeat(2, 1fr)'
 
 /**
+ * What a new frame is filled with.
+ *
+ * A frame with no fill is a dashed outline around nothing, which reads as
+ * a hole in the page rather than a thing on it. Something to see is the
+ * point of drawing one.
+ *
+ * Lower case because `<input type="color">` reports its value that way —
+ * stored as anything else, the swatch in the inspector would rewrite it
+ * the first time it was opened and closed without a change being made.
+ */
+const FILL = '#bbddff'
+
+/**
  * A seeded child: it claims an even share of whatever it is put inside.
  *
  * `fill` on both axes rather than a size, and not merely for neatness —
@@ -62,8 +75,17 @@ const TRACKS = 'repeat(2, 1fr)'
  * as `auto`, which collapses an empty frame to nothing. A seeded child
  * without this would be invisible. See `fillFor` in NodeRenderer.vue for
  * what fill becomes in each kind of parent.
+ *
+ * These carry the colour rather than the frame around them: filling both
+ * would make the gaps between children show the parent's own fill, and
+ * the whole thing would read as one solid block with the arrangement —
+ * the entire reason the children are here — invisible inside it.
  */
-const fillChild = (): NodeInit => ({ widthMode: 'fill', heightMode: 'fill' })
+const fillChild = (): NodeInit => ({
+  widthMode: 'fill',
+  heightMode: 'fill',
+  styles: { backgroundColor: FILL },
+})
 
 /**
  * The creation tools available to draw with.
@@ -89,7 +111,10 @@ export const TOOLS = [
     creates: 'div',
     // `none` is a frame that imposes no layout, so children sit at the
     // coordinates they were drawn at — what makes drawing WYSIWYG.
-    seedInit: (): NodeInit => ({ layout: 'none' }),
+    //
+    // The only tool whose own frame is filled: it has no children of its
+    // own to carry the colour for it.
+    seedInit: (): NodeInit => ({ layout: 'none', styles: { backgroundColor: FILL } }),
     // Empty, and not for want of a default: a frame that arranges nothing
     // is a place to put whatever you draw next, so putting something in
     // it up front would be in the way.

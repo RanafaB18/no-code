@@ -4,6 +4,7 @@ import { nextTick } from 'vue'
 
 import BuilderWorkspace from '../components/BuilderWorkspace.vue'
 import { resetView, toCanvasPoint, zoom } from '../composables/useCanvasView'
+import { endDrag } from '../composables/useCanvasDrag'
 import { toWorkspacePoint, workspaceOrigin } from '../composables/useWorkspaceRect'
 import { useTools } from '../composables/useTools'
 import { VIEWPORT_ID } from '../composables/useCanvasNodes'
@@ -49,6 +50,40 @@ function nodeFor(wrapper: VueWrapper, id: string): Element {
   return wrapper.get(`[data-node-id="${id}"]`).element
 }
 
+/**
+ * Gives a rendered node a box, which jsdom otherwise reports as zeros.
+ *
+ * Which frame receives a drawn element is decided by which one wholly
+ * contains the drawn rectangle, so a test about nesting has to say where
+ * the frames are. Real layout still belongs in the browser suite; this
+ * only pins down the containment rule itself.
+ */
+function boxFor(wrapper: VueWrapper, id: string, box: Rect) {
+  const element = nodeFor(wrapper, id) as HTMLElement
+  element.getBoundingClientRect = () =>
+    ({
+      x: box.left,
+      y: box.top,
+      left: box.left,
+      top: box.top,
+      right: box.left + box.width,
+      bottom: box.top + box.height,
+      width: box.width,
+      height: box.height,
+      toJSON: () => box,
+    }) as DOMRect
+}
+
+interface Rect {
+  left: number
+  top: number
+  width: number
+  height: number
+}
+
+/** The page, big enough that everything below is drawn inside it. */
+const PAGE: Rect = { left: 0, top: 0, width: 1000, height: 1000 }
+
 /** A resize grip on the selection frame, by the edges it drags. */
 function handleFor(wrapper: VueWrapper, name: string): Element {
   return wrapper.get(`[data-handle="${name}"]`).element
@@ -83,6 +118,9 @@ beforeEach(() => {
   // Unmounting resets it, but a test that sets it without mounting would
   // otherwise carry it into the next.
   workspaceOrigin.value = { x: 0, y: 0 }
+  // Another: a test that presses without releasing leaves a drag open, and
+  // the next one would mount with a frame still marked as being dragged.
+  endDrag()
   // Every geometry assertion below assumes pan/zoom are still identity —
   // BuilderWorkspace itself never touches them (see App.vue for why), but
   // reset explicitly rather than relying on that by omission.
@@ -110,7 +148,9 @@ describe('Workspace', () => {
     expect(drawn).toMatchObject({ left: 10, top: 10, width: 100, height: 70 })
     // Layout is a node field, not a CSS string in styles.
     expect(drawn?.layout).toBe('none')
-    expect(drawn?.styles).toEqual({})
+    // Styles carry appearance and nothing else — a drawn frame has a fill,
+    // but none of what the canvas manipulates directly.
+    expect(Object.keys(drawn?.styles ?? {})).toEqual(['backgroundColor'])
   })
 
   it('normalises a drag made in the reverse direction', async () => {
@@ -226,31 +266,71 @@ describe('Workspace', () => {
     expect(wrapper.get('.canvas-node').findAll('.workspace__handle')).toHaveLength(0)
   })
 
-  it('nests the new element into the frame the drag started in', async () => {
+  it('nests the new element into the frame that contains it', async () => {
     const parent = addNode('div')
     const wrapper = mount(BuilderWorkspace, { attachTo: document.body })
     await nextTick()
+    boxFor(wrapper, VIEWPORT_ID, PAGE)
+    boxFor(wrapper, parent.id, { left: 0, top: 0, width: 400, height: 300 })
 
     arm('frame')
-    await drag(nodeFor(wrapper, parent.id), { x: 0, y: 0 }, { x: 100, y: 50 })
+    await drag(wrapper.element, { x: 10, y: 10 }, { x: 110, y: 60 })
 
     // Root does not grow — the element went inside.
     expect(viewport.value.childrenIds).toHaveLength(1)
     expect(getNode(viewport.value.childrenIds[0])?.childrenIds).toHaveLength(1)
   })
 
-  it('nests into the innermost frame when frames are nested', async () => {
+  it('nests into the innermost frame that contains it', async () => {
     const outer = addNode('div')
     const inner = addNode('div', {}, outer.id)
     const wrapper = mount(BuilderWorkspace, { attachTo: document.body })
     await nextTick()
+    boxFor(wrapper, VIEWPORT_ID, PAGE)
+    boxFor(wrapper, outer.id, { left: 0, top: 0, width: 400, height: 300 })
+    boxFor(wrapper, inner.id, { left: 0, top: 0, width: 200, height: 150 })
 
     arm('frame')
-    await drag(nodeFor(wrapper, inner.id), { x: 0, y: 0 }, { x: 100, y: 50 })
+    await drag(wrapper.element, { x: 10, y: 10 }, { x: 110, y: 60 })
 
     expect(getNode(inner.id)?.childrenIds).toHaveLength(1)
     // The outer frame gained nothing beyond the inner one it already had.
     expect(getNode(outer.id)?.childrenIds).toHaveLength(1)
+  })
+
+  it('lands beside a frame it is drawn across, rather than inside it', async () => {
+    // The rule that lets one gesture both nest and add a sibling: a box
+    // crossing a frame's edge is not inside it, so it joins that frame's
+    // parent instead. Without it, seeded children that tile their parent
+    // would leave nowhere to press that meant "another one".
+    const outer = addNode('div')
+    const inner = addNode('div', {}, outer.id)
+    const wrapper = mount(BuilderWorkspace, { attachTo: document.body })
+    await nextTick()
+    boxFor(wrapper, VIEWPORT_ID, PAGE)
+    boxFor(wrapper, outer.id, { left: 0, top: 0, width: 400, height: 300 })
+    boxFor(wrapper, inner.id, { left: 0, top: 0, width: 200, height: 150 })
+
+    arm('frame')
+    // Starts inside `inner`, but finishes past its right edge.
+    await drag(wrapper.element, { x: 100, y: 40 }, { x: 300, y: 100 })
+
+    expect(getNode(inner.id)?.childrenIds).toHaveLength(0)
+    expect(getNode(outer.id)?.childrenIds).toHaveLength(2)
+  })
+
+  it('lands on the page when drawn across the frame it started in', async () => {
+    const parent = addNode('div')
+    const wrapper = mount(BuilderWorkspace, { attachTo: document.body })
+    await nextTick()
+    boxFor(wrapper, VIEWPORT_ID, PAGE)
+    boxFor(wrapper, parent.id, { left: 0, top: 0, width: 400, height: 300 })
+
+    arm('frame')
+    await drag(wrapper.element, { x: 200, y: 200 }, { x: 600, y: 500 })
+
+    expect(getNode(parent.id)?.childrenIds).toHaveLength(0)
+    expect(viewport.value.childrenIds).toHaveLength(2)
   })
 
   it('still appends at the root when the drag starts on bare workspace', async () => {
@@ -293,10 +373,14 @@ describe('Workspace', () => {
   })
 
   it('shows no highlight when the drag targets the root', async () => {
+    // The page receives the element like any other frame, but outlining
+    // the whole page says nothing that was not already obvious.
     const wrapper = mount(BuilderWorkspace, { attachTo: document.body })
+    await nextTick()
+    boxFor(wrapper, VIEWPORT_ID, PAGE)
     arm('frame')
 
-    firePointer(wrapper.element, 'pointerdown', { x: 0, y: 0 })
+    firePointer(wrapper.element, 'pointerdown', { x: 10, y: 10 })
     await nextTick()
 
     expect(wrapper.find('.workspace__drop-target').exists()).toBe(false)
@@ -307,9 +391,12 @@ describe('Workspace', () => {
     const wrapper = mount(BuilderWorkspace, { attachTo: document.body })
     await nextTick()
 
+    boxFor(wrapper, VIEWPORT_ID, PAGE)
+    boxFor(wrapper, parent.id, { left: 0, top: 0, width: 400, height: 300 })
+
     arm('frame')
     const parentNode = nodeFor(wrapper, parent.id)
-    firePointer(parentNode, 'pointerdown', { x: 0, y: 0 })
+    firePointer(parentNode, 'pointerdown', { x: 10, y: 10 })
     firePointer(parentNode, 'pointermove', { x: 60, y: 40 })
     await nextTick()
 
@@ -384,8 +471,11 @@ describe('Workspace', () => {
     const wrapper = mount(BuilderWorkspace, { attachTo: document.body })
     await nextTick()
 
+    boxFor(wrapper, VIEWPORT_ID, PAGE)
+    boxFor(wrapper, parent.id, { left: 0, top: 0, width: 400, height: 300 })
+
     arm('frame')
-    await drag(nodeFor(wrapper, parent.id), { x: 20, y: 30 }, { x: 120, y: 90 })
+    await drag(wrapper.element, { x: 20, y: 30 }, { x: 120, y: 90 })
 
     // A flex parent places its own children, so left/top would be inert —
     // emitting them would put values in the inspector the browser ignores.
@@ -626,9 +716,16 @@ describe('Workspace', () => {
     const second = addNode('div', { width: 50, height: 50 }, parent.id)
     const wrapper = mount(BuilderWorkspace, { attachTo: document.body })
     await nextTick()
+    // Boxes, because where a node lands is decided by what contains it.
+    // Left unstubbed, jsdom reports every one as a zero rect at the origin
+    // — where each frame contains every other and the node would reparent
+    // into its own sibling.
+    boxFor(wrapper, VIEWPORT_ID, PAGE)
+    boxFor(wrapper, parent.id, { left: 0, top: 0, width: 400, height: 300 })
+    boxFor(wrapper, first.id, { left: 0, top: 0, width: 50, height: 50 })
+    boxFor(wrapper, second.id, { left: 50, top: 0, width: 50, height: 50 })
 
-    // jsdom has no layout, so every sibling box measures as a zero rect at
-    // the origin — a drop below them all, which puts the node last.
+    // Dropped below both siblings, which puts the node last.
     await drag(nodeFor(wrapper, first.id), { x: 10, y: 10 }, { x: 10, y: 200 })
 
     expect(getNode(parent.id)?.childrenIds).toEqual([second.id, first.id])

@@ -2,6 +2,7 @@ import { expect, test } from '@playwright/test'
 
 import {
   VIEWPORT,
+  SELECTION_GAP,
   childrenOf,
   dragBy,
   drawFrame,
@@ -169,7 +170,7 @@ test.describe('Constraints', () => {
     const stretched = await rectOf(child)
     await dragBy(
       page,
-      { x: stretched.x + stretched.width + 4, y: stretched.y + stretched.height / 2 },
+      { x: stretched.x + stretched.width + SELECTION_GAP, y: stretched.y + stretched.height / 2 },
       -140,
       0,
     )

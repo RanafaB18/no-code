@@ -1,6 +1,6 @@
 import { expect, test } from '@playwright/test'
 
-import { VIEWPORT, dragBy, drawFrame, expectBox, openBuilder, rectOf, rootChildren } from './canvas'
+import { VIEWPORT, SELECTION_GAP, dragBy, drawFrame, expectBox, openBuilder, rectOf, rootChildren } from './canvas'
 
 /**
  * The lock is a claim about shape, and shape is what a browser resolves —
@@ -41,7 +41,7 @@ test.describe('Aspect ratio lock', () => {
 
     const box = await rectOf(rootChildren(page).first())
     // The right-middle grip, which alone would only ever change the width.
-    await dragBy(page, { x: box.x + box.width + 4, y: box.y + box.height / 2 }, 150, 0)
+    await dragBy(page, { x: box.x + box.width + SELECTION_GAP, y: box.y + box.height / 2 }, 150, 0)
 
     expectBox(await rectOf(rootChildren(page).first()), { width: 450, height: 300 })
   })
@@ -50,7 +50,7 @@ test.describe('Aspect ratio lock', () => {
     await page.locator(lock).click()
 
     const box = await rectOf(rootChildren(page).first())
-    const corner = { x: box.x + box.width + 4, y: box.y + box.height + 4 }
+    const corner = { x: box.x + box.width + SELECTION_GAP, y: box.y + box.height + SELECTION_GAP }
     // Mostly vertical, so the height leads and the width follows it —
     // deriving the same axis every time would make this drag do nothing.
     await dragBy(page, corner, 10, 100)

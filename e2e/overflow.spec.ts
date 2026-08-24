@@ -32,9 +32,13 @@ test.describe('Overflow', () => {
 
     const parentNode = rootChildren(page).first()
     const parent = await rectOf(parentNode)
-    // Begins inside the parent, so it nests there, and runs 150px past its
-    // right edge.
-    await drawFrame(page, { x: parent.x + 250, y: parent.y + 50 }, { width: 200, height: 100 })
+    // Drawn wholly inside the parent, so it nests there, then widened
+    // until it runs 150px past its right edge. Drawing it overhanging in
+    // one gesture would not nest it at all: a box that crosses a frame's
+    // edge is not inside that frame, so it would land as its sibling.
+    await drawFrame(page, { x: parent.x + 250, y: parent.y + 50 }, { width: 40, height: 100 })
+    await page.fill('#field-width', '200')
+    await page.keyboard.press('Tab')
 
     const child = childrenOf(parentNode).first()
     const childId = await child.getAttribute('data-node-id')
@@ -50,7 +54,10 @@ test.describe('Overflow', () => {
 
     const parentNode = rootChildren(page).first()
     const parent = await rectOf(parentNode)
-    await drawFrame(page, { x: parent.x + 250, y: parent.y + 50 }, { width: 200, height: 100 })
+    // Drawn inside, then widened past the parent's edge — see above.
+    await drawFrame(page, { x: parent.x + 250, y: parent.y + 50 }, { width: 40, height: 100 })
+    await page.fill('#field-width', '200')
+    await page.keyboard.press('Tab')
 
     // Select the parent from a corner no child covers, and clip it.
     await page.mouse.click(parent.x + 40, parent.y + 170)

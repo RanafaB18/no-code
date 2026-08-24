@@ -6,6 +6,16 @@ import type { NodeLayout } from '../src/composables/useCanvasNodes'
 export const VIEWPORT = '[data-node-id="viewport"]'
 
 /**
+ * How far outside an element its selection frame — and so its resize
+ * grips — sits. Mirrors `SELECTION_GAP` in BuilderWorkspace.vue.
+ *
+ * Exported rather than restated per spec, which is how it came to be
+ * wrong in four files at once: the frame moved flush against the element
+ * and every hand-written `+ 4` went on reaching for empty canvas.
+ */
+export const SELECTION_GAP = 0
+
+/**
  * How far a measured edge may drift from the expected one.
  *
  * Drawing rounds pointer coordinates to whole pixels, and a real browser

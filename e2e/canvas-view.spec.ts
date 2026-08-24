@@ -2,6 +2,7 @@ import { expect, test } from '@playwright/test'
 
 import {
   VIEWPORT,
+  SELECTION_GAP,
   canvasPoint,
   drawFrame,
   dragBy,
@@ -70,7 +71,7 @@ test.describe('Canvas view', () => {
     const box = await rectOf(rootChildren(page).first())
 
     // A 40-screen-px drag at 2x is 20 canvas px.
-    await dragBy(page, { x: box.x + box.width + 4, y: box.y + box.height / 2 }, 40, 0)
+    await dragBy(page, { x: box.x + box.width + SELECTION_GAP, y: box.y + box.height / 2 }, 40, 0)
 
     await expect(page.locator('#field-width')).toHaveValue('120')
   })
