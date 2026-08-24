@@ -3,6 +3,8 @@ import { computed, ref, watch } from 'vue'
 
 import ConstraintPins from '@/components/ConstraintPins.vue'
 import CornerRadius from '@/components/CornerRadius.vue'
+import GridSpan from '@/components/GridSpan.vue'
+import GridTracks from '@/components/GridTracks.vue'
 import SizePair from '@/components/SizePair.vue'
 import { measureNodeRect } from '@/composables/nodeMeasure'
 import {
@@ -257,7 +259,12 @@ function handleInput(property: StyleProperty, event: Event) {
 
         <div v-show="!collapsed.has(section.id)" :id="`group-${section.id}`" class="group__fields">
           <div v-for="property in shownIn(section)" :key="property.key" class="field">
-            <label class="field__label" :for="`field-${property.key}`">{{ property.label }}</label>
+            <!-- A widget that draws its own labelled rows leaves this
+                 blank, so its rows sit flush with the section's others
+                 instead of indented under a heading of their own. -->
+            <label v-if="property.label" class="field__label" :for="`field-${property.key}`">
+              {{ property.label }}
+            </label>
 
             <!-- Widgets write through themselves rather than producing a
                single value, so they stand outside the shared control row
@@ -276,6 +283,18 @@ function handleInput(property: StyleProperty, event: Event) {
 
             <CornerRadius
               v-else-if="property.input === 'corners'"
+              :id="`field-${property.key}`"
+              :node="selectedNode"
+            />
+
+            <GridTracks
+              v-else-if="property.input === 'grid-tracks'"
+              :id="`field-${property.key}`"
+              :node="selectedNode"
+            />
+
+            <GridSpan
+              v-else-if="property.input === 'grid-span'"
               :id="`field-${property.key}`"
               :node="selectedNode"
             />

@@ -5,6 +5,7 @@ import {
   addProperty,
   armFrame,
   childrenOf,
+  drawContainer,
   drawFrame,
   expectBox,
   openBuilder,
@@ -61,7 +62,7 @@ test.describe('Drawing', () => {
     page,
   }) => {
     const viewport = await rectOf(page.locator(VIEWPORT))
-    await drawFrame(
+    await drawContainer(
       page,
       { x: viewport.x + 80, y: viewport.y + 160 },
       { width: 560, height: 420 },

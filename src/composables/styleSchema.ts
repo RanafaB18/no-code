@@ -1,4 +1,5 @@
 import {
+  getNode,
   resolvedPosition,
   type CanvasNode,
   type NodeLayout,
@@ -29,14 +30,30 @@ import {
  * their own control and write through directly rather than going through
  * the shared field row.
  *
- *   'pins'      the constraint widget — which edges are anchored
- *   'size-pair' Width and Height together, plus the ratio lock between them
- *   'corners'   border radius, uniform or per corner
+ *   'pins'        the constraint widget — which edges are anchored
+ *   'size-pair'   Width and Height together, plus the ratio lock between them
+ *   'corners'     border radius, uniform or per corner
+ *   'grid-tracks' how many columns and rows a grid frame has
+ *   'grid-span'   how many of its parent's cells a frame covers
  */
 export type StyleInputType =
-  'number' | 'length' | 'color' | 'select' | 'pins' | 'size-pair' | 'corners'
+  | 'number'
+  | 'length'
+  | 'color'
+  | 'select'
+  | 'pins'
+  | 'size-pair'
+  | 'corners'
+  | 'grid-tracks'
+  | 'grid-span'
 
-const WIDGET_INPUTS: readonly StyleInputType[] = ['pins', 'size-pair', 'corners']
+const WIDGET_INPUTS: readonly StyleInputType[] = [
+  'pins',
+  'size-pair',
+  'corners',
+  'grid-tracks',
+  'grid-span',
+]
 
 /**
  * True for a property with no single field behind it.
@@ -168,6 +185,33 @@ function laysOutChildren(node: CanvasNode) {
   return node.layout !== 'none'
 }
 
+/**
+ * The two layouts, separately — several options belong to one and are
+ * inert in the other.
+ *
+ * `flex-direction` does nothing to a grid, and the single `gap` is
+ * replaced there by a pair, one per axis. Offering either anyway would
+ * put a control in the panel the browser ignores.
+ */
+function laysOutFlex(node: CanvasNode) {
+  return node.layout === 'flex'
+}
+
+function laysOutGrid(node: CanvasNode) {
+  return node.layout === 'grid'
+}
+
+/**
+ * True when this node's *parent* lays it out on a grid.
+ *
+ * The only predicate here that looks upward, and it has to: spanning
+ * cells is something a frame can only do inside a grid, so the control
+ * for it depends on a fact the node itself does not hold.
+ */
+function inGrid(node: CanvasNode) {
+  return getNode(node.parentId)?.layout === 'grid'
+}
+
 export const SIZE_MODES = [
   'fixed',
   'relative',
@@ -199,13 +243,24 @@ export const STYLE_PROPERTIES: readonly StyleProperty[] = [
     options: LAYOUT_VALUES,
   },
   {
+    key: 'gridTracks',
+    section: 'layout',
+    // No label: the widget draws its own Columns and Rows rows, which sit
+    // flush with the rest of the section rather than indented under a
+    // heading for them.
+    label: '',
+    input: 'grid-tracks',
+    source: 'style',
+    appliesTo: laysOutGrid,
+  },
+  {
     key: 'flexDirection',
     section: 'layout',
     label: 'Direction',
     input: 'select',
     source: 'style',
     options: ['row', 'column'],
-    appliesTo: laysOutChildren,
+    appliesTo: laysOutFlex,
   },
   {
     key: 'gap',
@@ -213,7 +268,25 @@ export const STYLE_PROPERTIES: readonly StyleProperty[] = [
     label: 'Gap',
     input: 'length',
     source: 'style',
-    appliesTo: laysOutChildren,
+    appliesTo: laysOutFlex,
+  },
+  // A grid gets one per axis where flex gets a single shorthand — the two
+  // directions are genuinely separate decisions on a grid.
+  {
+    key: 'columnGap',
+    section: 'layout',
+    label: 'Gap X',
+    input: 'length',
+    source: 'style',
+    appliesTo: laysOutGrid,
+  },
+  {
+    key: 'rowGap',
+    section: 'layout',
+    label: 'Gap Y',
+    input: 'length',
+    source: 'style',
+    appliesTo: laysOutGrid,
   },
   {
     key: 'justifyContent',
@@ -279,6 +352,18 @@ export const STYLE_PROPERTIES: readonly StyleProperty[] = [
   // Size — Width and Height together, one row each, plus the ratio lock
   // between them. One entry rather than five: the widget owns both axes'
   // writes itself, including the locked-ratio counterpart.
+  // Above Width and Height, because inside a grid it is the coarser
+  // answer to the same question: how many cells first, how big within
+  // them second.
+  {
+    key: 'gridSpan',
+    section: 'size',
+    // No label, as with the tracks widget — it draws its own rows.
+    label: '',
+    input: 'grid-span',
+    source: 'style',
+    appliesTo: inGrid,
+  },
   {
     key: 'size',
     section: 'size',

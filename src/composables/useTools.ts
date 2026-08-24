@@ -29,7 +29,41 @@ export interface Tool {
    * left here for a separate mode selector to vary.
    */
   seedInit: () => NodeInit
+  /**
+   * Frames stamped inside whatever this tool creates, in order.
+   *
+   * A frame that arranges its children is nothing to look at without any:
+   * drawing one and seeing an empty box gives no sign the tool did
+   * anything, and no hint of what it is for. So the tools that lay out
+   * children come with children.
+   *
+   * A function for the same reason `seedInit` is one — two frames drawn
+   * with the same tool must not end up sharing a styles object.
+   *
+   * Required rather than optional, so a tool that seeds nothing says so.
+   * `as const` keeps each entry's literal type, and an entry that simply
+   * omitted this would have no such property for the drawing code to ask
+   * about — the union would not agree on its own shape.
+   */
+  seedChildren: () => NodeInit[]
 }
+
+/** Seeded on the frames that arrange children, in px. */
+const GAP = '10px'
+
+/** Two even tracks — the 2×2 a new grid starts as. */
+const TRACKS = 'repeat(2, 1fr)'
+
+/**
+ * A seeded child: it claims an even share of whatever it is put inside.
+ *
+ * `fill` on both axes rather than a size, and not merely for neatness —
+ * both axes default to `fixed`, and a `fixed` axis with no number renders
+ * as `auto`, which collapses an empty frame to nothing. A seeded child
+ * without this would be invisible. See `fillFor` in NodeRenderer.vue for
+ * what fill becomes in each kind of parent.
+ */
+const fillChild = (): NodeInit => ({ widthMode: 'fill', heightMode: 'fill' })
 
 /**
  * The creation tools available to draw with.
@@ -56,20 +90,39 @@ export const TOOLS = [
     // `none` is a frame that imposes no layout, so children sit at the
     // coordinates they were drawn at — what makes drawing WYSIWYG.
     seedInit: (): NodeInit => ({ layout: 'none' }),
+    // Empty, and not for want of a default: a frame that arranges nothing
+    // is a place to put whatever you draw next, so putting something in
+    // it up front would be in the way.
+    seedChildren: () => [],
   },
   {
     id: 'flex',
     label: 'Flex',
     shortcut: '2',
     creates: 'div',
-    seedInit: (): NodeInit => ({ layout: 'flex' }),
+    seedInit: (): NodeInit => ({ layout: 'flex', styles: { gap: GAP } }),
+    seedChildren: () => [fillChild(), fillChild()],
   },
   {
     id: 'grid',
     label: 'Grid',
     shortcut: '3',
     creates: 'div',
-    seedInit: (): NodeInit => ({ layout: 'grid' }),
+    // Tracks both ways, so the four below land as a 2×2 rather than
+    // stacking in the single column an untracked grid gives you. The gaps
+    // are per axis here, unlike flex's one: a grid has two to set.
+    seedInit: (): NodeInit => ({
+      layout: 'grid',
+      styles: {
+        gridTemplateColumns: TRACKS,
+        gridTemplateRows: TRACKS,
+        columnGap: GAP,
+        rowGap: GAP,
+      },
+    }),
+    // No span on any of them: absent reads as one cell, which is what
+    // each of these wants.
+    seedChildren: () => [fillChild(), fillChild(), fillChild(), fillChild()],
   },
 ] as const satisfies readonly Tool[]
 

@@ -5,6 +5,7 @@ import {
   addProperty,
   childrenOf,
   dragBy,
+  drawContainer,
   drawFrame,
   expectBox,
   expectNear,
@@ -54,7 +55,7 @@ test.describe('Sizing modes', () => {
     page,
   }) => {
     const viewport = await rectOf(page.locator(VIEWPORT))
-    await drawFrame(
+    await drawContainer(
       page,
       { x: viewport.x + 100, y: viewport.y + 160 },
       { width: 600, height: 300 },
@@ -84,7 +85,7 @@ test.describe('Sizing modes', () => {
 
   test('a filling frame keeps its size when it leaves the flow', async ({ page }) => {
     const viewport = await rectOf(page.locator(VIEWPORT))
-    await drawFrame(
+    await drawContainer(
       page,
       { x: viewport.x + 100, y: viewport.y + 160 },
       { width: 600, height: 300 },
@@ -126,7 +127,7 @@ test.describe('Sizing modes', () => {
 
   test('fit shrinks to contents rather than stretching across a flex row', async ({ page }) => {
     const viewport = await rectOf(page.locator(VIEWPORT))
-    await drawFrame(
+    await drawContainer(
       page,
       { x: viewport.x + 100, y: viewport.y + 160 },
       { width: 600, height: 300 },
@@ -148,7 +149,7 @@ test.describe('Sizing modes', () => {
     page,
   }) => {
     const viewport = await rectOf(page.locator(VIEWPORT))
-    await drawFrame(
+    await drawContainer(
       page,
       { x: viewport.x + 100, y: viewport.y + 160 },
       { width: 600, height: 300 },

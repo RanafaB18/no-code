@@ -40,11 +40,58 @@ describe('useTools', () => {
   })
 
   it('seeds each tool with its own fixed layout', () => {
-    expect(TOOLS.map((tool) => [tool.id, tool.seedInit()])).toEqual([
-      ['frame', { layout: 'none' }],
-      ['flex', { layout: 'flex' }],
-      ['grid', { layout: 'grid' }],
+    expect(TOOLS.map((tool) => [tool.id, tool.seedInit().layout])).toEqual([
+      ['frame', 'none'],
+      ['flex', 'flex'],
+      ['grid', 'grid'],
     ])
+  })
+
+  it('gives the frames that arrange children something to arrange', () => {
+    // An empty flex frame looks exactly like an empty plain one, so the
+    // tool would give no sign it had done anything at all.
+    expect(TOOLS.map((tool) => [tool.id, tool.seedChildren().length])).toEqual([
+      ['frame', 0],
+      ['flex', 2],
+      ['grid', 4],
+    ])
+  })
+
+  it('seeds every child filling both axes', () => {
+    // Not a nicety: both axes default to `fixed`, and a fixed axis with no
+    // number renders as auto — which collapses an empty frame to nothing.
+    // A seeded child without this would be invisible.
+    const children = TOOLS.flatMap((tool) => tool.seedChildren())
+
+    expect(children).not.toHaveLength(0)
+    for (const child of children) {
+      expect(child).toMatchObject({ widthMode: 'fill', heightMode: 'fill' })
+    }
+  })
+
+  it('gives a grid tracks both ways, so its children land as a square', () => {
+    // Without these a grid is a single column, which is a flex column with
+    // extra steps — and the four children below would stack.
+    const grid = TOOLS.find((tool) => tool.id === 'grid')!
+
+    expect(grid.seedInit().styles).toMatchObject({
+      gridTemplateColumns: 'repeat(2, 1fr)',
+      gridTemplateRows: 'repeat(2, 1fr)',
+    })
+  })
+
+  it('seeds a gap on the frames that arrange children, and only those', () => {
+    const gapOf = (id: string) => {
+      const styles = TOOLS.find((tool) => tool.id === id)!.seedInit().styles ?? {}
+      return { ...styles }
+    }
+
+    // Flex takes the shorthand; a grid sets its two axes separately.
+    expect(gapOf('flex')).toMatchObject({ gap: '10px' })
+    expect(gapOf('grid')).toMatchObject({ columnGap: '10px', rowGap: '10px' })
+    // A frame with no layout has no gap to speak of, and the inspector
+    // hides the row — seeding one would be an invisible style.
+    expect(gapOf('frame')).toEqual({})
   })
 
   it('offers a tool for every layout a frame can have', () => {
@@ -58,6 +105,15 @@ describe('useTools', () => {
   it('hands out a fresh seed each time, never a shared object', () => {
     // Two nodes drawn with one tool must not end up sharing fields.
     expect(TOOLS[0]?.seedInit()).not.toBe(TOOLS[0]?.seedInit())
+
+    // Same for the children, and one level deeper: the array is rebuilt,
+    // and so is every entry in it.
+    const flex = TOOLS.find((tool) => tool.id === 'flex')!
+    expect(flex.seedChildren()).not.toBe(flex.seedChildren())
+    expect(flex.seedChildren()[0]).not.toBe(flex.seedChildren()[0])
+    // And the two siblings from one call are not the same object either.
+    const [first, second] = flex.seedChildren()
+    expect(first).not.toBe(second)
   })
 
   it('gives every tool a unique id and shortcut', () => {

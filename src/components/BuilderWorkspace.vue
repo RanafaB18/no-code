@@ -999,8 +999,17 @@ function handlePointerUp(event: PointerEvent) {
         : { width: geometry.width, height: geometry.height }
 
     const created = addNode(tool.creates, { ...tool.seedInit(), ...placed }, dropTargetId.value)
+
+    // A tool that lays out children comes with children — see
+    // `seedChildren`. Appended in order, and given no geometry: the frame
+    // above places them, so anything positional here would be inert.
+    for (const child of tool.seedChildren()) {
+      addNode(tool.creates, child, created.id)
+    }
+
     // Hand the new element to the inspector — the tool disarms below, so
     // we land in select mode with the thing just drawn already selected.
+    // The frame that was drawn, not one of the children inside it.
     selectNode(created.id)
     // One draw per arming: the tool releases itself rather than staying
     // armed for another.

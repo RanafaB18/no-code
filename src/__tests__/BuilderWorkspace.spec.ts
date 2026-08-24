@@ -333,6 +333,52 @@ describe('Workspace', () => {
     expect(drawn).toMatchObject({ width: 100, height: 50 })
   })
 
+  it('fills a flex frame with two children and a grid with four', async () => {
+    // A frame that arranges children is nothing to look at without any.
+    const wrapper = mount(BuilderWorkspace, { attachTo: document.body })
+
+    arm('flex')
+    await drag(wrapper.element, { x: 0, y: 0 }, { x: 200, y: 100 })
+    arm('grid')
+    await drag(wrapper.element, { x: 0, y: 200 }, { x: 200, y: 300 })
+
+    const [flex, grid] = viewport.value.childrenIds.map((id) => getNode(id))
+    expect(flex?.childrenIds).toHaveLength(2)
+    expect(grid?.childrenIds).toHaveLength(4)
+  })
+
+  it('leaves a plain frame empty', async () => {
+    const wrapper = mount(BuilderWorkspace, { attachTo: document.body })
+
+    arm('frame')
+    await drag(wrapper.element, { x: 0, y: 0 }, { x: 200, y: 100 })
+
+    expect(getNode(viewport.value.childrenIds[0])?.childrenIds).toHaveLength(0)
+  })
+
+  it('seeds children that fill, so they are visible at all', async () => {
+    // Both axes default to `fixed`, and a fixed axis with no number is
+    // auto — which collapses an empty frame to nothing.
+    const wrapper = mount(BuilderWorkspace, { attachTo: document.body })
+
+    arm('flex')
+    await drag(wrapper.element, { x: 0, y: 0 }, { x: 200, y: 100 })
+
+    const drawn = getNode(viewport.value.childrenIds[0])!
+    for (const childId of drawn.childrenIds) {
+      expect(getNode(childId)).toMatchObject({ widthMode: 'fill', heightMode: 'fill' })
+    }
+  })
+
+  it('selects the frame that was drawn, not one of its children', async () => {
+    const wrapper = mount(BuilderWorkspace, { attachTo: document.body })
+
+    arm('grid')
+    await drag(wrapper.element, { x: 0, y: 0 }, { x: 200, y: 100 })
+
+    expect(selectedId.value).toBe(viewport.value.childrenIds[0])
+  })
+
   it('discards the drawn position when the parent lays its children out', async () => {
     const parent = addNode('div', { layout: 'flex', width: 400, height: 300 })
     const wrapper = mount(BuilderWorkspace, { attachTo: document.body })

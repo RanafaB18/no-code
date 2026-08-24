@@ -169,6 +169,29 @@ export async function drawFrame(
   await page.mouse.up()
 }
 
+/**
+ * Draws an **empty** container: a plain frame, switched to `layout`
+ * afterwards.
+ *
+ * The Flex and Grid tools seed children — two and four — which is the
+ * point of them and exactly what a test about how a container lays out
+ * frames the test itself draws does not want. Going through the Layout
+ * field instead also keeps those tests about the layout engine rather
+ * than about what a tool happens to stamp.
+ *
+ * Drawing selects what it drew, so the field already targets the new
+ * frame.
+ */
+export async function drawContainer(
+  page: Page,
+  origin: { x: number; y: number },
+  size: { width: number; height: number },
+  layout: Exclude<NodeLayout, 'none'>,
+) {
+  await drawFrame(page, origin, size)
+  await page.locator('#field-layout').selectOption(layout)
+}
+
 /** Presses at a point and drags by a delta, in one gesture. */
 export async function dragBy(page: Page, from: { x: number; y: number }, dx: number, dy: number) {
   await page.mouse.move(from.x, from.y)

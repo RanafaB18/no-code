@@ -4,6 +4,7 @@ import {
   VIEWPORT,
   childrenOf,
   dragBy,
+  drawContainer,
   drawFrame,
   expectBox,
   nodeIdsOf,
@@ -139,7 +140,7 @@ test.describe('Move and resize', () => {
 
   test('dragging an in-flow child past its siblings reorders it', async ({ page }) => {
     const viewport = await rectOf(page.locator(VIEWPORT))
-    await drawFrame(
+    await drawContainer(
       page,
       { x: viewport.x + 80, y: viewport.y + 160 },
       { width: 600, height: 300 },

@@ -246,6 +246,82 @@ describe('Inspector', () => {
     })
   })
 
+  describe('grid controls', () => {
+    /**
+     * Which of these fields the inspector offers for a node.
+     *
+     * One node at a time, deliberately: every mounted inspector reads the
+     * same module-level selection, so holding two wrappers open and
+     * comparing them afterwards would only ever show the last selection
+     * twice.
+     */
+    async function fieldsFor(node: { id: string }, keys: readonly string[]) {
+      const wrapper = await mountWith(node)
+      const shown = keys.filter((key) => wrapper.find(`#field-${key}`).exists())
+      wrapper.unmount()
+      return shown
+    }
+
+    const LAYOUT_KEYS = [
+      'gridTemplateColumns',
+      'gridTemplateRows',
+      'columnGap',
+      'rowGap',
+      'flexDirection',
+      'gap',
+    ] as const
+
+    it('offers a grid its tracks and a gap per axis', async () => {
+      expect(await fieldsFor(addNode('div', { layout: 'grid' }), LAYOUT_KEYS)).toEqual([
+        'gridTemplateColumns',
+        'gridTemplateRows',
+        'columnGap',
+        'rowGap',
+      ])
+    })
+
+    it('offers flex its direction and a single gap', async () => {
+      // `flex-direction` does nothing to a grid, and a grid's gap is the
+      // pair above — offering either there would be a control the browser
+      // ignores.
+      expect(await fieldsFor(addNode('div', { layout: 'flex' }), LAYOUT_KEYS)).toEqual([
+        'flexDirection',
+        'gap',
+      ])
+    })
+
+    it('offers a frame that arranges nothing neither', async () => {
+      expect(await fieldsFor(addNode('div', { layout: 'none' }), LAYOUT_KEYS)).toEqual([])
+    })
+
+    it('offers alignment to both, since both honour it', async () => {
+      const keys = ['justifyContent', 'alignItems'] as const
+
+      expect(await fieldsFor(addNode('div', { layout: 'grid' }), keys)).toEqual([...keys])
+      expect(await fieldsFor(addNode('div', { layout: 'flex' }), keys)).toEqual([...keys])
+    })
+
+    const SPAN_KEYS = ['gridColumn', 'gridRow'] as const
+
+    it('offers span to a frame its parent lays out on a grid', async () => {
+      const grid = addNode('div', { layout: 'grid' })
+
+      expect(await fieldsFor(addNode('div', {}, grid.id), SPAN_KEYS)).toEqual([...SPAN_KEYS])
+    })
+
+    it('offers no span inside a flex frame, where there are no cells', async () => {
+      const flex = addNode('div', { layout: 'flex' })
+
+      expect(await fieldsFor(addNode('div', {}, flex.id), SPAN_KEYS)).toEqual([])
+    })
+
+    it('does not offer a grid its own span — that is its parent’s business', async () => {
+      // A grid frame sets how many cells exist; spanning them is what the
+      // frames inside it do.
+      expect(await fieldsFor(addNode('div', { layout: 'grid' }), SPAN_KEYS)).toEqual([])
+    })
+  })
+
   it('keeps keystrokes in its fields away from the canvas', () => {
     // The boundary used to come from the floating panel wrapper. It is
     // what stops Backspace in a width field deleting the selected element
