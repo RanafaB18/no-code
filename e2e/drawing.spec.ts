@@ -91,6 +91,35 @@ test.describe('Drawing', () => {
     expectBox(await rectOf(child), { x: parent.x, y: parent.y, width: 140, height: 90 })
   })
 
+  test('nests a child drawn to its parent’s full height', async ({ page }) => {
+    // Filling a frame means drawing onto two of its edges at once, which a
+    // hand cannot do exactly — and a pixel proud used to leave the element
+    // a sibling of the frame it had been drawn onto.
+    const viewport = await rectOf(page.locator(VIEWPORT))
+    await drawFrame(page, { x: viewport.x + 80, y: viewport.y + 120 }, { width: 420, height: 160 })
+
+    const parent = rootChildren(page).first()
+    const box = await rectOf(parent)
+    await drawFrame(page, { x: box.x + 40, y: box.y - 1 }, { width: 100, height: 160 })
+
+    await expect(rootChildren(page)).toHaveCount(1)
+    await expect(childrenOf(parent)).toHaveCount(1)
+  })
+
+  test('still lands beside a frame it is drawn well across', async ({ page }) => {
+    // The slack above forgives a hand aiming at an edge; it must not
+    // swallow the deliberate act of crossing one, which is how an element
+    // is placed beside a frame rather than inside it.
+    const viewport = await rectOf(page.locator(VIEWPORT))
+    await drawFrame(page, { x: viewport.x + 80, y: viewport.y + 120 }, { width: 420, height: 160 })
+
+    const box = await rectOf(rootChildren(page).first())
+    await drawFrame(page, { x: box.x + 40, y: box.y + 40 }, { width: 100, height: 260 })
+
+    await expect(rootChildren(page)).toHaveCount(2)
+    await expect(childrenOf(rootChildren(page).first())).toHaveCount(0)
+  })
+
   test('nests into the innermost frame the drag began in', async ({ page }) => {
     const viewport = await rectOf(page.locator(VIEWPORT))
     await drawFrame(page, { x: viewport.x + 80, y: viewport.y + 160 }, { width: 560, height: 420 })

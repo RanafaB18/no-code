@@ -242,36 +242,61 @@ const insertionStyle = ref<Record<string, string> | null>(null)
 const INSERTION_OVERSHOOT = 4
 
 /**
- * Works out that line from the boxes either side of the insertion point.
+ * Whether this parent's children run side by side rather than stacked.
  *
- * Reading the siblings rather than the parent's `flex-direction` so one
- * rule covers a row, a column and a grid alike: whichever way the two
- * neighbours are separated is the way the frames flow, and the line is
- * drawn across it. With only one neighbour there is nothing to compare,
- * so the line goes on its near or far edge as the index demands and takes
- * that box's own proportions for its length.
+ * Reading two real siblings' relative position rather than the parent's
+ * own `flex-direction`, so one rule covers a row, a column and a grid
+ * alike — their separation is the ground truth regardless of which of
+ * the three produced it.
+ *
+ * Deliberately *any* two siblings, not only the ones either side of the
+ * insertion point: with only one neighbour to go on there — inserting at
+ * the very start or end of the list — the previous version fell back to
+ * that single box's own aspect ratio, which is a guess about the row
+ * from the shape of one item in it. A two-column flex row with a modest
+ * width and a generous height produces children taller than they are
+ * wide, and the guess called that a column. Two siblings from anywhere in
+ * the list settle it directly; with only one child total there is truly
+ * nothing to compare, so it falls back to the parent's own direction —
+ * `column` for a flex frame that says so, `row` otherwise, the same
+ * default the inspector now shows for an unset one.
+ */
+function layoutIsHorizontal(parent: CanvasNode, siblings: readonly Rect[]): boolean {
+  if (siblings.length >= 2) {
+    const [a, b] = siblings
+    return Math.abs(b!.left - a!.left) >= Math.abs(b!.top - a!.top)
+  }
+  return parent.styles.flexDirection !== 'column'
+}
+
+/**
+ * Works out the insertion line from the boxes either side of the drop
+ * point, oriented by `layoutIsHorizontal`.
+ *
+ * With only one neighbour to butt against — inserting at the very start
+ * or end — the line goes on its near or far edge as the index demands
+ * and takes that box's own proportions for its length.
  */
 function insertionLine(
   parent: CanvasNode,
-  movingId: NodeId,
+  siblings: readonly Rect[],
   index: number,
 ): Record<string, string> | null {
-  const siblings = parent.childrenIds
-    .filter((id) => id !== movingId)
-    .map((id) => measureRect(id))
-    .filter((rect): rect is Rect => rect !== null)
+  if (siblings.length === 0) return null
 
-  const before = siblings[index - 1] ?? null
-  const after = siblings[index] ?? null
+  // Only the one or two boxes the line actually butts against get rebased
+  // into workspace space. `toLocal` re-reads the workspace's own rect on
+  // every call, so converting the whole list — as measuring each sibling
+  // through `measureRect` used to — paid for that read once per sibling
+  // to position a line that never touches most of them.
+  const local = (rect: Rect | null) => (rect ? toLocal(rect, workspace.value) : null)
+  const before = local(siblings[index - 1] ?? null)
+  const after = local(siblings[index] ?? null)
   if (!before && !after) return null
 
   const anchor = (before ?? after)!
   const other = before && after ? after : null
-
-  // Side by side when the gap between them is wider than it is tall.
-  const horizontal = other
-    ? Math.abs(other.left - anchor.left) >= Math.abs(other.top - anchor.top)
-    : anchor.width >= anchor.height
+  const horizontal = layoutIsHorizontal(parent, siblings)
 
   const span = (rect: Rect) => ({
     top: Math.min(rect.top, anchor.top) - INSERTION_OVERSHOOT,
@@ -292,38 +317,50 @@ function insertionLine(
   return { left: `${left}px`, top: `${top}px`, width: `${width}px` }
 }
 
-/** True when `rect` (client px) fits entirely within the element's box. */
+/**
+ * How far a box may overhang a frame and still count as inside it, in
+ * screen px.
+ *
+ * Exact containment reads well until you try to fill a frame: a child the
+ * same height as its parent has to be drawn onto both edges at once, and
+ * a hand cannot do that — a pixel proud of the top and the frame silently
+ * refuses it, leaving the element a sibling of the frame it was drawn
+ * onto. Fractional zoom makes it worse, since the edge is then not on a
+ * whole pixel at all.
+ *
+ * Screen px rather than canvas px, and the same size as `MIN_DRAG`, for
+ * the same reason: this forgives the hand, and the hand is no steadier at
+ * one zoom than another. Small enough that the deliberate act of drawing
+ * across a frame's edge — which is how you place something beside it —
+ * still reads as crossing.
+ */
+const CONTAINMENT_SLACK = 4
+
+/** True when `rect` (client px) fits within the element's box, near enough. */
 function encloses(element: HTMLElement, rect: Rect): boolean {
   const box = element.getBoundingClientRect()
   return (
-    rect.left >= box.left &&
-    rect.top >= box.top &&
-    rect.left + rect.width <= box.right &&
-    rect.top + rect.height <= box.bottom
+    rect.left >= box.left - CONTAINMENT_SLACK &&
+    rect.top >= box.top - CONTAINMENT_SLACK &&
+    rect.left + rect.width <= box.right + CONTAINMENT_SLACK &&
+    rect.top + rect.height <= box.bottom + CONTAINMENT_SLACK
   )
 }
 
 /**
- * The innermost frame that entirely contains `rect`, or null for bare
- * canvas.
- *
- * Containment rather than what sits under the pointer, which is what lets
- * one gesture mean two things without a modifier: a box drawn wholly
- * inside a frame goes into it, and the same box drawn so that it crosses
- * that frame's edge is not inside it any more, so it lands beside it
- * instead. Drawn across two children of a row, it belongs to neither and
- * joins the row as their sibling.
- *
- * That distinction is load-bearing now that the Flex and Grid tools seed
- * children which tile their parent completely: under a pointer rule there
- * would be nowhere left to press that meant "add another one".
+ * The innermost frame satisfying `matches`, or null for bare canvas.
  *
  * Last child first, because later siblings paint over earlier ones — the
- * same rule the eye is applying while it watches.
+ * same rule the eye is applying while it watches. `skipId` is left out
+ * along with its whole subtree, since the descent never gets past it: a
+ * frame being moved cannot land inside itself.
  */
-function frameContaining(rect: Rect, skipId: NodeId | null = null): HTMLElement | null {
+function innermostFrame(
+  matches: (element: HTMLElement) => boolean,
+  skipId: NodeId | null = null,
+): HTMLElement | null {
   const root = nodeElement(VIEWPORT_ID)
-  if (!root || !encloses(root, rect)) return null
+  if (!root || !matches(root)) return null
 
   let element = root
   let id: NodeId = VIEWPORT_ID
@@ -333,12 +370,10 @@ function frameContaining(rect: Rect, skipId: NodeId | null = null): HTMLElement 
 
     for (let i = children.length - 1; i >= 0; i -= 1) {
       const childId = children[i]!
-      // A node being moved cannot land inside itself, and skipping it
-      // takes its whole subtree with it — the descent never gets past it.
       if (childId === skipId) continue
 
       const child = nodeElement(childId)
-      if (child && encloses(child, rect)) {
+      if (child && matches(child)) {
         id = childId
         element = child
         continue descend
@@ -347,6 +382,32 @@ function frameContaining(rect: Rect, skipId: NodeId | null = null): HTMLElement 
 
     return element
   }
+}
+
+/**
+ * The frame a box belongs to: the innermost one containing it. One rule
+ * for both gestures — a box drawn and a frame dragged land in the same
+ * place from the same position.
+ *
+ * Containment rather than what sits under the pointer, which is what lets
+ * one gesture mean two things without a modifier: a box wholly inside a
+ * frame goes into it, and the same box crossing that frame's edge is not
+ * inside it any more, so it lands beside it instead. Across two children
+ * of a row it belongs to neither and joins the row as their sibling —
+ * which is also how a row is reordered, since a frame dragged along one
+ * is inside the row but not inside any of its cells.
+ *
+ * That distinction is load-bearing now that the Flex and Grid tools seed
+ * children which tile their parent completely: under a pointer rule there
+ * would be nowhere left to press that meant "add another one".
+ *
+ * `encloses` carries the slack that makes "inside" reachable by hand —
+ * without it a frame the exact size of its target could never be dropped
+ * into it, since a box only contains an equal box when the two align to
+ * the pixel.
+ */
+function frameContaining(rect: Rect, skipId: NodeId | null = null): HTMLElement | null {
+  return innermostFrame((element) => encloses(element, rect), skipId)
 }
 
 /**
@@ -858,11 +919,20 @@ function beginTransform(event: PointerEvent, nodeId: NodeId, edges: readonly Edg
     height: startSize(node, measured, 'height'),
   }
 
+  const absolute = resolvedPosition(node) === 'absolute'
+
   if (isMove) {
     beginDrag(nodeId)
-    // Measured before anything moves, so the placeholder marks the slot
-    // the frame is leaving rather than wherever it has got to since.
-    dragOriginRect.value = measureRect(nodeId)
+
+    // Only for a frame its parent places. That one follows the pointer by
+    // a transform, so its slot stays reserved behind it and the
+    // placeholder marks something real. A frame that positions itself
+    // moves for real and leaves nothing behind, so the same box would be
+    // a stale copy of where it used to be and nothing more.
+    //
+    // Measured before anything moves, so it marks the slot the frame is
+    // leaving rather than wherever it has got to since.
+    dragOriginRect.value = absolute ? null : measureRect(nodeId)
 
     const box = nodeElement(nodeId)?.getBoundingClientRect()
     dragOriginClient = box
@@ -875,7 +945,7 @@ function beginTransform(event: PointerEvent, nodeId: NodeId, edges: readonly Edg
     edges,
     released,
     ratio: aspectRatioOf(node),
-    absolute: resolvedPosition(node) === 'absolute',
+    absolute,
     origin: { x: event.clientX, y: event.clientY },
     start,
     // All four pins and their flags, not just the origin pair: a gesture
@@ -989,23 +1059,18 @@ function resizeGeometry(active: Transform, dx: number, dy: number): NodeGeometry
 }
 
 /**
- * Where a dragged node should land among its siblings.
+ * Every child of `parent` except the one being moved, in client px.
  *
- * Reading order rather than a single axis, so one rule serves a row, a
- * column and a grid alike: a sibling comes before the drop when the
- * pointer is past its bottom edge entirely, or level with it and past its
- * midpoint.
- *
- * Sibling boxes are read here rather than cached at gesture start because
- * an in-flow move changes nothing until release — nothing has shifted
- * under us in between.
+ * Measured in one pass and handed to both `insertionIndex` and
+ * `insertionLine`, which need the same boxes and used to each go and find
+ * them: two `document.querySelector`s and two layout reads per sibling,
+ * on every pointermove of a drag. Read per move rather than cached at
+ * gesture start because a drag can reorder the siblings under it, and a
+ * stale set would place the line against boxes that had already moved.
  */
-function insertionIndex(
-  parent: CanvasNode,
-  movingId: NodeId,
-  point: { x: number; y: number },
-): number {
-  let index = 0
+function siblingBoxes(parent: CanvasNode, movingId: NodeId): Rect[] {
+  const boxes: Rect[] = []
+
   for (const siblingId of parent.childrenIds) {
     if (siblingId === movingId) continue
 
@@ -1013,8 +1078,27 @@ function insertionIndex(
     if (!element) continue
 
     const box = element.getBoundingClientRect()
-    const level = point.y >= box.top && point.y <= box.bottom
-    if (point.y > box.bottom || (level && point.x > box.left + box.width / 2)) index += 1
+    boxes.push({ left: box.left, top: box.top, width: box.width, height: box.height })
+  }
+
+  return boxes
+}
+
+/**
+ * Where a dragged node should land among its siblings.
+ *
+ * Reading order rather than a single axis, so one rule serves a row, a
+ * column and a grid alike: a sibling comes before the drop when the
+ * pointer is past its bottom edge entirely, or level with it and past its
+ * midpoint.
+ */
+function insertionIndex(siblings: readonly Rect[], point: ViewPoint): number {
+  let index = 0
+
+  for (const box of siblings) {
+    const bottom = box.top + box.height
+    const level = point.y >= box.top && point.y <= bottom
+    if (point.y > bottom || (level && point.x > box.left + box.width / 2)) index += 1
   }
 
   return index
@@ -1085,10 +1169,14 @@ function updateMoveFeedback(active: Transform, rect: Rect | null, point: ViewPoi
   // Only a frame that lays its children out has an order to insert into;
   // one that lets them position themselves has nowhere to draw a line.
   const parent = getNode(targetId)
-  insertionStyle.value =
-    parent && parent.layout !== 'none'
-      ? insertionLine(parent, active.nodeId, insertionIndex(parent, active.nodeId, point))
-      : null
+  if (!parent || parent.layout === 'none') {
+    insertionStyle.value = null
+    return
+  }
+
+  // Measured once for both the index and the line — see `siblingBoxes`.
+  const siblings = siblingBoxes(parent, active.nodeId)
+  insertionStyle.value = insertionLine(parent, siblings, insertionIndex(siblings, point))
 }
 
 /** Clears everything a move gesture puts on screen. */
@@ -1135,15 +1223,33 @@ function placementIn(parent: CanvasNode, node: CanvasNode, local: Rect): NodeGeo
  * Settles a finished move: which frame the node now belongs to, and where
  * among its children it sits.
  *
- * The receiving frame is the innermost one that wholly contains the node
- * where it was dropped — the same rule drawing uses, so dragging a frame
- * into a flex row and drawing one there put it in the same place.
+ * The receiving frame is the innermost one wholly containing the dragged
+ * box — the same rule drawing uses, and the same one
+ * `updateMoveFeedback` has been highlighting by throughout the gesture.
+ *
+ * Nesting and reordering both fall out of it rather than needing separate
+ * gestures: a frame dropped inside a cell is contained by that cell and
+ * goes into it, while one dragged along a row is inside the row but
+ * inside none of its cells, so the row takes it and the index below
+ * decides where in the order it lands.
  */
 function finishTransform(event: PointerEvent) {
   const active = transform
   transform = null
 
+  // Only for rebasing the node's own offsets onto its new parent below —
+  // the drop target itself was settled while the drag was still live.
   const rect = draggedRect(event.clientX - (active?.origin.x ?? 0), event.clientY - (active?.origin.y ?? 0))
+
+  // Whatever the highlight has been pointing at, read before the feedback
+  // is torn down. Deliberately not re-resolved from this event: drawing
+  // reads the same refs at pointerup for the same reason, and resolving
+  // twice is how the frame the chrome promised and the frame that
+  // actually takes it drift apart.
+  //
+  // Released clear of the page entirely: it still belongs to something,
+  // and the page is the only thing left.
+  const targetElement = dropTargetNode.value ?? nodeElement(VIEWPORT_ID)
   clearMoveFeedback()
 
   if (!active?.moved || active.edges.length > 0) return
@@ -1151,14 +1257,14 @@ function finishTransform(event: PointerEvent) {
   const node = getNode(active.nodeId)
   if (!node?.parentId || !rect) return
 
-  // Dropped clear of the page entirely: it still belongs to something, and
-  // the page is the only thing left.
-  const targetElement = frameContaining(rect, node.id) ?? nodeElement(VIEWPORT_ID)
+  const point = { x: event.clientX, y: event.clientY }
+
   const targetId = targetElement?.dataset.nodeId ?? VIEWPORT_ID
   const target = getNode(targetId)
   if (!target || !targetElement) return
 
-  const point = { x: event.clientX, y: event.clientY }
+  // One measurement for whichever branch below runs — see `siblingBoxes`.
+  const index = insertionIndex(siblingBoxes(target, node.id), point)
 
   if (targetId === node.parentId) {
     // Same parent, so this is a reorder — and only a frame the parent
@@ -1167,7 +1273,6 @@ function finishTransform(event: PointerEvent) {
     // Its own index doubles as the no-op case: reinserting a node at the
     // position it already occupies would churn two arrays for nothing.
     const current = target.childrenIds.indexOf(node.id)
-    const index = insertionIndex(target, node.id, point)
     if (index !== current) moveNode(node.id, targetId, index)
     return
   }
@@ -1176,7 +1281,7 @@ function finishTransform(event: PointerEvent) {
   const local = toCanvasLocal(rect, targetElement)
   const laidOut = node.position !== 'absolute' && target.layout !== 'none'
 
-  moveNode(node.id, targetId, insertionIndex(target, node.id, point))
+  moveNode(node.id, targetId, index)
 
   // `fill` is a grant from a parent that lays the frame out. Carrying it
   // into a parent that does not would collapse the box to nothing, so the

@@ -124,6 +124,22 @@ export interface StyleProperty {
   options?: Dynamic<readonly string[]>
   placeholder?: Dynamic<string>
   /**
+   * What an unset value reads as, when CSS itself already has an opinion.
+   *
+   * Only for a `select` — a length or colour has no meaningful browser
+   * default to stand in for. `flexDirection` is the case this exists for:
+   * CSS defaults to `row` whether the style is there or not, so showing
+   * the picker at "—" was never true of what was on screen, only of what
+   * happened to be written down.
+   *
+   * Display only, and read through a dedicated helper rather than
+   * `valueOf` — `isSet` and the Clear button both read `valueOf` directly
+   * and must keep seeing nothing stored, or Clear would sit enabled for a
+   * value there is nothing to clear, and an optional property with this
+   * set would show as set when no one had touched it.
+   */
+  default?: Dynamic<string>
+  /**
    * Hides a property that would be inert in the node's current context —
    * offsets under a parent that positions its own children, or flex
    * options on a frame with no layout. Showing a value the browser
@@ -261,6 +277,10 @@ export const STYLE_PROPERTIES: readonly StyleProperty[] = [
     source: 'style',
     options: ['row', 'column'],
     appliesTo: laysOutFlex,
+    // The tools never write this — see `ToolIcon.vue` — so it reads as
+    // unset on every flex frame drawn, even though CSS is already
+    // rendering it as `row`.
+    default: 'row',
   },
   {
     key: 'gap',

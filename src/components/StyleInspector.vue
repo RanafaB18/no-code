@@ -41,6 +41,20 @@ function valueOf(node: CanvasNode, property: StyleProperty): string {
 }
 
 /**
+ * What the field should show — `valueOf`, with `property.default` standing
+ * in for an unset one.
+ *
+ * Kept apart from `valueOf` itself: `isSet` and the Clear button both read
+ * that directly and need to keep seeing nothing stored, or Clear would sit
+ * enabled with nothing to clear.
+ */
+function displayValue(node: CanvasNode, property: StyleProperty): string {
+  const raw = valueOf(node, property)
+  if (raw !== '' || property.default === undefined) return raw
+  return resolveDynamic(property.default, node)
+}
+
+/**
  * Writes a property back to wherever it lives.
  *
  * Geometry, layout and position are first-class fields the canvas reads
@@ -304,7 +318,7 @@ function handleInput(property: StyleProperty, event: Event) {
                 v-if="property.input === 'select'"
                 :id="`field-${property.key}`"
                 class="field__input"
-                :value="valueOf(selectedNode, property)"
+                :value="displayValue(selectedNode, property)"
                 @change="handleInput(property, $event)"
               >
                 <option value="">—</option>

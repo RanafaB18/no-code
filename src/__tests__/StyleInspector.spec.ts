@@ -303,6 +303,25 @@ describe('Inspector', () => {
 
     const SPAN_KEYS = ['gridColumn', 'gridRow'] as const
 
+    it('shows a flex frame the direction CSS is already giving it', async () => {
+      // The tools never write `flex-direction`, so the picker sat at "—"
+      // while the browser was laying the frame out as a row regardless.
+      const wrapper = await mountWith(addNode('div', { layout: 'flex' }))
+
+      expect(wrapper.get<HTMLSelectElement>('#field-flexDirection').element.value).toBe('row')
+    })
+
+    it('still counts that direction as unset', async () => {
+      // Display only: nothing is stored until the field is actually
+      // touched, so Clear has nothing to clear.
+      const node = addNode('div', { layout: 'flex' })
+      const wrapper = await mountWith(node)
+
+      expect(node.styles.flexDirection).toBeUndefined()
+      const clear = wrapper.get('[aria-label="Clear Direction"]')
+      expect(clear.attributes('disabled')).toBeDefined()
+    })
+
     it('offers span to a frame its parent lays out on a grid', async () => {
       const grid = addNode('div', { layout: 'grid' })
 

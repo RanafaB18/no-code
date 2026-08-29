@@ -734,6 +734,42 @@ describe('Workspace', () => {
     expect(getNode(first.id)?.top).toBeUndefined()
   })
 
+  describe('the placeholder a drag leaves behind', () => {
+    it('marks the slot a frame its parent places is leaving', async () => {
+      // That frame follows the pointer by a transform, so its slot stays
+      // reserved and the placeholder marks something that is really there.
+      const parent = addNode('div', { layout: 'flex', width: 400, height: 300 })
+      const child = addNode('div', { width: 50, height: 50 }, parent.id)
+      const wrapper = mount(BuilderWorkspace, { attachTo: document.body })
+      await nextTick()
+      boxFor(wrapper, VIEWPORT_ID, PAGE)
+      boxFor(wrapper, parent.id, { left: 0, top: 0, width: 400, height: 300 })
+      boxFor(wrapper, child.id, { left: 0, top: 0, width: 50, height: 50 })
+
+      firePointer(nodeFor(wrapper, child.id), 'pointerdown', { x: 10, y: 10 })
+      firePointer(wrapper.element, 'pointermove', { x: 90, y: 90 })
+      await nextTick()
+
+      expect(wrapper.find('.workspace__drag-origin').exists()).toBe(true)
+    })
+
+    it('shows none for a frame that positions itself', async () => {
+      // It moves for real and leaves nothing behind, so the placeholder
+      // would be a stale copy of where it used to be and nothing else.
+      const node = addNode('div', { left: 40, top: 30, width: 100, height: 60 })
+      const wrapper = mount(BuilderWorkspace, { attachTo: document.body })
+      await nextTick()
+      boxFor(wrapper, VIEWPORT_ID, PAGE)
+      boxFor(wrapper, node.id, { left: 40, top: 30, width: 100, height: 60 })
+
+      firePointer(nodeFor(wrapper, node.id), 'pointerdown', { x: 50, y: 40 })
+      firePointer(wrapper.element, 'pointermove', { x: 130, y: 120 })
+      await nextTick()
+
+      expect(wrapper.find('.workspace__drag-origin').exists()).toBe(false)
+    })
+  })
+
   it('resizes from the bottom-right handle without moving the origin', async () => {
     const node = addNode('div', { left: 40, top: 30, width: 100, height: 60 })
     const wrapper = mount(BuilderWorkspace, { attachTo: document.body })

@@ -2,6 +2,7 @@
 import { computed, nextTick, ref, useTemplateRef } from 'vue'
 import { onClickOutside } from '@vueuse/core'
 
+import ToolIcon from '@/components/ToolIcon.vue'
 import { TOOLS, useTools, type ToolId } from '@/composables/useTools'
 import { workspaceElement } from '@/composables/useWorkspaceRect'
 
@@ -42,6 +43,14 @@ const armed = computed(() => TOOLS.find((tool) => tool.id === activeToolId.value
 const triggerLabel = computed(() =>
   armed.value ? `Insert — ${armed.value.label} armed` : 'Insert',
 )
+
+/**
+ * Which glyph the trigger shows: whatever is armed, or Frame while
+ * nothing is — Frame is first in the registry and the plainest of the
+ * three, so it reads as the tool menu's own resting icon rather than as
+ * a claim that Frame is armed.
+ */
+const triggerIcon = computed<ToolId>(() => armed.value?.id ?? 'frame')
 
 async function openMenu() {
   open.value = true
@@ -116,7 +125,7 @@ onClickOutside(root, () => close({ restoreFocus: false }))
       :title="triggerLabel"
       @click="open ? close() : openMenu()"
     >
-      <span class="tool-menu__glyph" aria-hidden="true">▣</span>
+      <ToolIcon :tool="triggerIcon" />
       <span class="tool-menu__caret" aria-hidden="true">▾</span>
     </button>
 
@@ -141,7 +150,10 @@ onClickOutside(root, () => close({ restoreFocus: false }))
         tabindex="-1"
         @click="choose(tool.id)"
       >
-        <span class="tool-menu__label">{{ tool.label }}</span>
+        <span class="tool-menu__item-main">
+          <ToolIcon :tool="tool.id" />
+          <span class="tool-menu__label">{{ tool.label }}</span>
+        </span>
         <kbd class="tool-menu__shortcut">{{ tool.shortcut }}</kbd>
       </button>
     </div>
@@ -216,6 +228,12 @@ onClickOutside(root, () => close({ restoreFocus: false }))
   background-color: transparent;
   border-radius: 0.25rem;
   cursor: pointer;
+}
+
+.tool-menu__item-main {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
 }
 
 .tool-menu__item:hover {

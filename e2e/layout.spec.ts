@@ -310,6 +310,135 @@ test.describe('Layout', () => {
       })
     })
 
+    test('a frame dragged wholly inside a cell becomes that cell’s child', async ({ page }) => {
+      // Containment is the whole rule: inside a cell means into the cell.
+      const viewport = await rectOf(page.locator(VIEWPORT))
+      await drawFrame(
+        page,
+        { x: viewport.x + 80, y: viewport.y + 120 },
+        { width: 400, height: 200 },
+        'flex',
+      )
+      await drawFrame(page, { x: viewport.x + 80, y: viewport.y + 500 }, { width: 90, height: 60 })
+
+      const row = rootChildren(page).first()
+      const cell = childrenOf(row).first()
+      const cellBox = await rectOf(cell)
+      const loose = await rectOf(rootChildren(page).nth(1))
+
+      // Dropped so the whole 90×60 box sits inside the cell.
+      await dragBy(
+        page,
+        { x: loose.x + 45, y: loose.y + 30 },
+        cellBox.x + cellBox.width / 2 - (loose.x + 45),
+        cellBox.y + cellBox.height / 2 - (loose.y + 30),
+      )
+
+      await expect(rootChildren(page)).toHaveCount(1)
+      // Still two cells, and the frame went inside the first of them.
+      await expect(childrenOf(row)).toHaveCount(2)
+      await expect(childrenOf(cell)).toHaveCount(1)
+    })
+
+    test('a frame the same size as a cell still fits inside it', async ({ page }) => {
+      // Strict containment would refuse this forever: a box only contains
+      // an equal box when the two align to the pixel, which no hand does.
+      const viewport = await rectOf(page.locator(VIEWPORT))
+      await drawFrame(
+        page,
+        { x: viewport.x + 80, y: viewport.y + 120 },
+        { width: 400, height: 200 },
+        'flex',
+      )
+
+      const row = rootChildren(page).first()
+      const cell = childrenOf(row).first()
+      const cellBox = await rectOf(cell)
+
+      // A loose frame of exactly the cell's size, drawn clear of the row.
+      await drawFrame(
+        page,
+        { x: viewport.x + 80, y: viewport.y + 500 },
+        { width: Math.round(cellBox.width), height: Math.round(cellBox.height) },
+      )
+      const loose = await rectOf(rootChildren(page).nth(1))
+
+      await dragBy(
+        page,
+        { x: loose.x + 20, y: loose.y + 20 },
+        cellBox.x - loose.x,
+        cellBox.y - loose.y,
+      )
+
+      await expect(rootChildren(page)).toHaveCount(1)
+      await expect(childrenOf(cell)).toHaveCount(1)
+    })
+
+    test('a dragged frame paints above frames drawn after it', async ({ page }) => {
+      // The dragged frame keeps its place in the tree throughout, so
+      // without being raised it paints in DOM order — and would vanish
+      // behind the very frame the highlight says it is about to enter.
+      //
+      // Drawn FIRST on purpose: later siblings paint over earlier ones, so
+      // a frame drawn second would sit on top regardless and this would
+      // pass whether the rule existed or not.
+      const viewport = await rectOf(page.locator(VIEWPORT))
+      await drawFrame(page, { x: viewport.x + 80, y: viewport.y + 520 }, { width: 180, height: 110 })
+      await drawFrame(
+        page,
+        { x: viewport.x + 80, y: viewport.y + 120 },
+        { width: 460, height: 200 },
+        'flex',
+      )
+
+      const dragged = await rectOf(rootChildren(page).nth(0))
+      const row = await rectOf(rootChildren(page).nth(1))
+
+      await page.mouse.move(dragged.x + 90, dragged.y + 55)
+      await page.mouse.down()
+      await page.mouse.move(row.x + 200, row.y + 100, { steps: 10 })
+
+      const paintedIsDragged = await page.evaluate(
+        ([x, y]) => {
+          const el = document.elementFromPoint(x as number, y as number)
+          return (el as HTMLElement | null)?.classList.contains('canvas-node--dragging') ?? false
+        },
+        [row.x + 200, row.y + 100],
+      )
+      await page.mouse.up()
+
+      expect(paintedIsDragged).toBe(true)
+    })
+
+    test('the insertion line runs across a row, not along it', async ({ page }) => {
+      // Orientation comes from how two real siblings are separated. Read
+      // from a single neighbour's aspect ratio instead — as it was — a row
+      // of tall cells looked like a column, and the line lay along the row
+      // it was meant to cut across.
+      const viewport = await rectOf(page.locator(VIEWPORT))
+      await drawFrame(
+        page,
+        { x: viewport.x + 80, y: viewport.y + 120 },
+        { width: 560, height: 180 },
+        'flex',
+      )
+      await drawFrame(page, { x: viewport.x + 80, y: viewport.y + 520 }, { width: 200, height: 110 })
+
+      const row = await rectOf(rootChildren(page).nth(0))
+      const loose = await rectOf(rootChildren(page).nth(1))
+
+      // Inside the row, straddling the gap, so the row is the target
+      // rather than either cell.
+      await page.mouse.move(loose.x + 100, loose.y + 55)
+      await page.mouse.down()
+      await page.mouse.move(row.x + 280, row.y + 90, { steps: 10 })
+
+      const line = await page.locator('.workspace__insertion').boundingBox()
+      await page.mouse.up()
+
+      expect(line!.height).toBeGreaterThan(line!.width)
+    })
+
     test('a plain frame still comes empty', async ({ page }) => {
       const viewport = await rectOf(page.locator(VIEWPORT))
       await drawFrame(page, { x: viewport.x + 80, y: viewport.y + 120 }, { width: 300, height: 200 })

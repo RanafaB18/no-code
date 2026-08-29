@@ -253,9 +253,42 @@ const binding = computed(() => {
  */
 
 /* Translucent while it is being dragged, so what it is being dragged
-   over stays readable underneath it. */
+   over stays readable underneath it — and raised above everything else on
+   the canvas, not only its own siblings. The node stays in its original
+   place in the tree throughout the drag (see `dragTransform`), so without
+   this it paints in DOM order like anything else: dragged out of an
+   earlier-drawn frame and over a later one, it would render *behind* the
+   very frame the highlight says it is about to enter.
+   No `position` here — `binding` above always sets one inline (`relative`
+   or `absolute`, never `static`), which is what lets z-index apply at
+   all.
+
+   `1`, not some large number, and that is genuinely enough: no frame ever
+   sets a z-index of its own, so every one of them sits at `auto` and any
+   positive value clears the lot. `.workspace__canvas`'s pan/zoom
+   transform is the only stacking context between a frame and the
+   workspace root, so frames at every depth compete in that one flat
+   context rather than each parent trapping its children in its own. A
+   bigger number would only imply a rival that does not exist.
+
+   The workspace's own overlays are unaffected either way: they are
+   siblings of `.workspace__canvas` and later in the DOM, so they paint
+   above the whole canvas regardless of what happens inside it. */
 .canvas-node--dragging {
-  opacity: 0.7;
+  z-index: 1;
+  /* An edge, because being on top is not the same as looking it. A frame
+     dragged over another of its own colour occludes it perfectly and so
+     shows no seam at all, and the whole thing reads as one shape — or
+     worse, as the dragged frame having gone underneath.
+
+     This is also why it is not drawn translucent, which was the first
+     attempt: over a frame of the same colour, any blend of a colour with
+     itself is that colour again, so the overlap vanished exactly where it
+     most needed to be legible, while the part hanging over the page
+     turned pale and read as though it were behind. Opaque with an edge
+     says "above" in both places. */
+  outline: 1px solid var(--color-accent);
+  outline-offset: -1px;
 }
 
 /* The page being designed, against the surrounding canvas. Solid rather
