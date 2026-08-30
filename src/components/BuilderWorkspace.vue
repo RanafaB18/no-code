@@ -353,6 +353,9 @@ function isBeneath(node: CanvasNode, ancestorId: NodeId): boolean {
  */
 const BOUNDARY_REACH = 8
 
+/** The line's own weight, in px — mirrored by `.workspace__insertion`. */
+const INSERTION_THICKNESS = 2
+
 /**
  * A border a dragged frame can be dropped against.
  *
@@ -417,7 +420,12 @@ function boundariesOf(
 
   insertAt(near(parentRect), 0)
   siblings.forEach((child, index) => {
-    if (index < siblings.length - 1) insertAt(far(child), index + 1)
+    // Midway between the two it divides, which is the middle of the gap
+    // when there is one and their shared border when there is not. Not
+    // the near child's own edge: with a gap that would hang the line off
+    // one side of the space it is describing.
+    const next = siblings[index + 1]
+    if (next) insertAt((far(child) + near(next)) / 2, index + 1)
   })
   insertAt(far(parentRect), siblings.length)
 
@@ -466,7 +474,18 @@ function boundaryAt(boundaries: readonly Boundary[], point: ViewPoint): Boundary
     if (distance > BOUNDARY_REACH) continue
     if (along < boundary.from || along > boundary.to) continue
 
-    if (distance < bestDistance) {
+    // Ties go to the wrap, and they happen at the corners where a border
+    // between children runs into the stack's own edge. The insert border
+    // spans the stack's whole length and gives up only its last few
+    // pixels here; the wrap border *is* the edge, and its middle third is
+    // exactly where a two-cell row puts its gap — so the other way round,
+    // centre alignment would be unreachable on the commonest stack there
+    // is. Compared with a little slack rather than exactly, since both
+    // offsets are measured rather than counted.
+    const closer = distance < bestDistance - 0.5
+    const tied = Math.abs(distance - bestDistance) <= 0.5 && boundary.intent.kind === 'wrap'
+
+    if (closer || tied) {
       best = boundary
       bestDistance = distance
     }
@@ -475,20 +494,30 @@ function boundaryAt(boundaries: readonly Boundary[], point: ViewPoint): Boundary
   return best
 }
 
-/** The line itself: lying along the border it has snapped to. */
+/**
+ * The line itself: lying along the border it has snapped to.
+ *
+ * Half its own thickness back across the border, so it straddles the
+ * border rather than sitting to one side of it — and nothing along its
+ * length, so its ends, and the dots drawn on them, land exactly on the
+ * two edges it runs between.
+ */
 function insertionLine(boundary: Boundary): Record<string, string> {
+  const half = INSERTION_THICKNESS / 2
+  const length = `${boundary.to - boundary.from}px`
+
   if (boundary.horizontal) {
     return {
       left: `${boundary.from}px`,
-      top: `${boundary.offset}px`,
-      width: `${boundary.to - boundary.from}px`,
+      top: `${boundary.offset - half}px`,
+      width: length,
     }
   }
 
   return {
-    left: `${boundary.offset}px`,
+    left: `${boundary.offset - half}px`,
     top: `${boundary.from}px`,
-    height: `${boundary.to - boundary.from}px`,
+    height: length,
   }
 }
 
@@ -2101,6 +2130,10 @@ useCanvasShortcuts({
 /* A hairline with a dot at each end, sized from whichever dimension the
    line spans — the other is left to the inline style. Both dots are drawn
    by pseudo-elements so the line stays one element to position. */
+/* Thickness here is mirrored by `INSERTION_THICKNESS`, which offsets the
+   line by half of it so it straddles the border. Whichever dimension the
+   inline style does not set falls back to this, which is what makes one
+   element serve both orientations. */
 .workspace__insertion {
   position: absolute;
   z-index: 1;
@@ -2109,7 +2142,6 @@ useCanvasShortcuts({
   background-color: var(--color-accent);
   border-radius: 1px;
   pointer-events: none;
-  transform: translate(-1px, -1px);
 }
 
 .workspace__insertion::before,
