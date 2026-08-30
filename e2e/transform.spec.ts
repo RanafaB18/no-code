@@ -159,14 +159,14 @@ test.describe('Move and resize', () => {
     expect(before).toHaveLength(3)
 
     const first = await rectOf(children.nth(0))
-    const last = await rectOf(children.nth(2))
 
-    // Past the last sibling's midpoint, level with the row — which is
-    // what the reading-order rule reads as "after all three".
+    // Onto the row's own far border, which is the insertion point after
+    // every child. Borders are the targets: a drop that lands on none of
+    // them offers nothing and reorders nothing.
     await dragBy(
       page,
       { x: first.x + first.width / 2, y: first.y + first.height / 2 },
-      last.x + last.width - 10 - (first.x + first.width / 2),
+      parent.x + parent.width - (first.x + first.width / 2),
       0,
     )
 

@@ -48,8 +48,14 @@ export interface Tool {
   seedChildren: () => NodeInit[]
 }
 
-/** Seeded on the frames that arrange children, in px. */
-const GAP = '10px'
+/**
+ * Seeded on the frames that arrange children, in px.
+ *
+ * Exported because a stack is not only ever drawn: dragging a frame
+ * against another stack's edge builds one too, and the two would look
+ * unrelated if they disagreed about this.
+ */
+export const STACK_GAP = '10px'
 
 /** Two even tracks — the 2×2 a new grid starts as. */
 const TRACKS = 'repeat(2, 1fr)'
@@ -125,7 +131,7 @@ export const TOOLS = [
     label: 'Flex',
     shortcut: '2',
     creates: 'div',
-    seedInit: (): NodeInit => ({ layout: 'flex', styles: { gap: GAP } }),
+    seedInit: (): NodeInit => ({ layout: 'flex', styles: { gap: STACK_GAP } }),
     seedChildren: () => [fillChild(), fillChild()],
   },
   {
@@ -141,8 +147,8 @@ export const TOOLS = [
       styles: {
         gridTemplateColumns: TRACKS,
         gridTemplateRows: TRACKS,
-        columnGap: GAP,
-        rowGap: GAP,
+        columnGap: STACK_GAP,
+        rowGap: STACK_GAP,
       },
     }),
     // No span on any of them: absent reads as one cell, which is what

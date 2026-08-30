@@ -7,6 +7,7 @@ import {
   drawContainer,
   drawFrame,
   expectBox,
+  expectNear,
   openBuilder,
   rectOf,
   rootChildren,
@@ -437,6 +438,106 @@ test.describe('Layout', () => {
       await page.mouse.up()
 
       expect(line!.height).toBeGreaterThan(line!.width)
+    })
+
+    /**
+     * Borders are the targets. The pointer has to be on one, and which
+     * one it is on says what the drop means: a border between children
+     * divides the row, while the row's own outer border asks for
+     * something the row cannot do and wraps it instead.
+     */
+    test.describe('dropping against a border', () => {
+      async function rowAndLoose(page: import('@playwright/test').Page) {
+        const viewport = await rectOf(page.locator(VIEWPORT))
+        await drawFrame(
+          page,
+          { x: viewport.x + 80, y: viewport.y + 120 },
+          { width: 500, height: 160 },
+          'flex',
+        )
+        await drawFrame(page, { x: viewport.x + 80, y: viewport.y + 520 }, { width: 200, height: 110 })
+
+        return {
+          row: await rectOf(rootChildren(page).nth(0)),
+          loose: await rectOf(rootChildren(page).nth(1)),
+        }
+      }
+
+      test('a border between cells divides the row, full height', async ({ page }) => {
+        const { row, loose } = await rowAndLoose(page)
+        const cell = await rectOf(childrenOf(rootChildren(page).first()).first())
+
+        await page.mouse.move(loose.x + 100, loose.y + 55)
+        await page.mouse.down()
+        await page.mouse.move(cell.x + cell.width, row.y + row.height / 2, { steps: 10 })
+
+        const line = await page.locator('.workspace__insertion').boundingBox()
+        // Vertical, and spanning the whole border it divides.
+        expect(line!.height).toBeGreaterThan(line!.width)
+        expectNear(line!.height, row.height, 'line spans the border')
+
+        await page.mouse.up()
+        await expect(rootChildren(page)).toHaveCount(1)
+        await expect(childrenOf(rootChildren(page).first())).toHaveCount(3)
+      })
+
+      test('the row’s own border wraps it in a stack, aligned by the third hit', async ({
+        page,
+      }) => {
+        const { row, loose } = await rowAndLoose(page)
+
+        await page.mouse.move(loose.x + 100, loose.y + 55)
+        await page.mouse.down()
+        // The middle third of the bottom border.
+        await page.mouse.move(row.x + row.width / 2, row.y + row.height, { steps: 10 })
+
+        const line = await page.locator('.workspace__insertion').boundingBox()
+        // Horizontal, and a third of the border long — short enough to say
+        // which way the new stack will align what it wraps.
+        expect(line!.width).toBeGreaterThan(line!.height)
+        expectNear(line!.width, row.width / 3, 'a third of the border')
+
+        await page.mouse.up()
+
+        // One frame on the page now: a column holding the row and the
+        // frame that was dropped against it.
+        await expect(rootChildren(page)).toHaveCount(1)
+        const wrapper = rootChildren(page).first()
+        await expect(childrenOf(wrapper)).toHaveCount(2)
+
+        const style = await wrapper.evaluate((el) => {
+          const cs = getComputedStyle(el)
+          return { display: cs.display, direction: cs.flexDirection, align: cs.alignItems }
+        })
+        expect(style).toEqual({ display: 'flex', direction: 'column', align: 'center' })
+      })
+
+      test('the outer third wraps with the alignment that third stands for', async ({ page }) => {
+        const { row, loose } = await rowAndLoose(page)
+
+        await page.mouse.move(loose.x + 100, loose.y + 55)
+        await page.mouse.down()
+        await page.mouse.move(row.x + row.width - 20, row.y + row.height, { steps: 10 })
+        await page.mouse.up()
+
+        const align = await rootChildren(page)
+          .first()
+          .evaluate((el) => getComputedStyle(el).alignItems)
+        expect(align).toBe('flex-end')
+      })
+
+      test('no border under the pointer offers nothing', async ({ page }) => {
+        // The middle of a cell is on no border at all, so there is no
+        // insertion to make and the frame is left where it was dropped.
+        const { row, loose } = await rowAndLoose(page)
+
+        await page.mouse.move(loose.x + 100, loose.y + 55)
+        await page.mouse.down()
+        await page.mouse.move(row.x + 120, row.y + row.height / 2, { steps: 10 })
+
+        await expect(page.locator('.workspace__insertion')).toHaveCount(0)
+        await page.mouse.up()
+      })
     })
 
     test('a plain frame still comes empty', async ({ page }) => {

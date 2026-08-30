@@ -725,8 +725,10 @@ describe('Workspace', () => {
     boxFor(wrapper, first.id, { left: 0, top: 0, width: 50, height: 50 })
     boxFor(wrapper, second.id, { left: 50, top: 0, width: 50, height: 50 })
 
-    // Dropped below both siblings, which puts the node last.
-    await drag(nodeFor(wrapper, first.id), { x: 10, y: 10 }, { x: 10, y: 200 })
+    // Dropped on the row's own far border, which is the insertion point
+    // after every child. A drop that lands on no border at all offers
+    // nothing and reorders nothing — the border is the target.
+    await drag(nodeFor(wrapper, first.id), { x: 10, y: 10 }, { x: 400, y: 25 })
 
     expect(getNode(parent.id)?.childrenIds).toEqual([second.id, first.id])
     // A flex parent places its children, so no offsets were written.

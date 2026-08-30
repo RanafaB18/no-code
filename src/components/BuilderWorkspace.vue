@@ -24,7 +24,7 @@ import {
 import { onResizeFrame } from '@/composables/useViewport'
 import { toWorkspacePoint, useWorkspaceRect } from '@/composables/useWorkspaceRect'
 import { SHORTCUT_BOUNDARY, useCanvasShortcuts } from '@/composables/useCanvasShortcuts'
-import { useTools } from '@/composables/useTools'
+import { STACK_GAP, useTools } from '@/composables/useTools'
 import {
   PIN_KEY,
   VIEWPORT_HEIGHT,
@@ -238,8 +238,24 @@ const dragOriginStyle = computed(() => frameStyle(dragOriginRect.value, 0))
  */
 const insertionStyle = ref<Record<string, string> | null>(null)
 
-/** How far the line overshoots the siblings it sits between, in px. */
-const INSERTION_OVERSHOOT = 4
+/**
+ * What releasing here would actually do.
+ *
+ * Resolved once while the drag is live and read back on release, so the
+ * line on screen and the change to the document cannot disagree — the
+ * same single-source rule the drop target itself already follows.
+ */
+type DropIntent =
+  | { kind: 'insert'; parentId: NodeId; index: number }
+  | {
+      kind: 'wrap'
+      targetId: NodeId
+      direction: 'row' | 'column'
+      before: boolean
+      align: 'flex-start' | 'center' | 'flex-end'
+    }
+
+const dropIntent = ref<DropIntent | null>(null)
 
 /**
  * Whether this parent's children run side by side rather than stacked.
@@ -269,52 +285,211 @@ function layoutIsHorizontal(parent: CanvasNode, siblings: readonly Rect[]): bool
   return parent.styles.flexDirection !== 'column'
 }
 
+/** True when the pointer is on or within `reach` of the element's box. */
+function coversPoint(element: HTMLElement, point: ViewPoint, reach = 0): boolean {
+  const box = element.getBoundingClientRect()
+  return (
+    point.x >= box.left - reach &&
+    point.x <= box.right + reach &&
+    point.y >= box.top - reach &&
+    point.y <= box.bottom + reach
+  )
+}
+
 /**
- * Works out the insertion line from the boxes either side of the drop
- * point, oriented by `layoutIsHorizontal`.
+ * The innermost stack whose borders the pointer could be on.
  *
- * With only one neighbour to butt against — inserting at the very start
- * or end — the line goes on its near or far edge as the index demands
- * and takes that box's own proportions for its length.
+ * Borders come from the cursor, not from the dragged box: a frame dropped
+ * against a row's outer border deliberately hangs outside the row, so
+ * containment can never name the row and would send the frame to the page
+ * instead. What the box is *inside* still decides nesting; this decides
+ * whose borders are on offer.
+ *
+ * Grown by the same reach the borders themselves use, or the outer ones
+ * would be unreachable from the only side you can approach them from.
  */
-function insertionLine(
+function stackNear(point: ViewPoint, skipId: NodeId | null): CanvasNode | null {
+  const root = nodeElement(VIEWPORT_ID)
+  if (!root || !coversPoint(root, point, BOUNDARY_REACH)) return null
+
+  let found: CanvasNode | null = null
+  let id: NodeId = VIEWPORT_ID
+
+  descend: for (;;) {
+    const current = getNode(id)
+    if (current && current.layout !== 'none') found = current
+
+    for (const childId of current?.childrenIds ?? []) {
+      if (childId === skipId) continue
+      const child = nodeElement(childId)
+      if (child && coversPoint(child, point, BOUNDARY_REACH)) {
+        id = childId
+        continue descend
+      }
+    }
+
+    return found
+  }
+}
+
+/** True when `node` sits somewhere beneath `ancestorId`. */
+function isBeneath(node: CanvasNode, ancestorId: NodeId): boolean {
+  let current = getNode(node.parentId)
+  while (current) {
+    if (current.id === ancestorId) return true
+    current = getNode(current.parentId)
+  }
+  return false
+}
+
+/**
+ * How near a border the pointer has to be to hit it, in workspace px.
+ *
+ * A border has no width, so intersecting one exactly is not something a
+ * hand can do. Same forgiveness as `MIN_DRAG` and `CONTAINMENT_SLACK`,
+ * and small enough that the middle of a cell hits nothing at all — which
+ * is the state that lets a frame be dropped straight onto the page while
+ * the pointer is over a stack.
+ */
+const BOUNDARY_REACH = 8
+
+/**
+ * A border a dragged frame can be dropped against.
+ *
+ * `offset` is where the line sits across its own direction; `from`/`to`
+ * are its ends along that direction. Both in workspace px.
+ *
+ * A stack can express some of these and not others. Along its main axis
+ * it can put a child anywhere in the order, so those borders `insert`.
+ * Across that axis it cannot put a child at all — a row has no "below" to
+ * place anything in — so its own two outer borders `wrap`, in a new stack
+ * running the other way.
+ */
+interface Boundary {
+  offset: number
+  from: number
+  to: number
+  horizontal: boolean
+  intent: DropIntent
+}
+
+/** Where along a cross-axis border the drop landed, and what that means. */
+const ALIGNMENTS = ['flex-start', 'center', 'flex-end'] as const
+
+/**
+ * Every border of a laid-out frame that a frame can be dropped against.
+ *
+ * Main-axis borders sit where its children actually meet — the parent's
+ * own near and far edges, and the far edge of every child but the last.
+ * The gaps between children are not targets and never were: a gap is
+ * space, the border is the thing, which is why a stack with no gap at all
+ * still takes an insertion.
+ *
+ * Cross-axis borders are the parent's own two edges, each divided into
+ * three along its length. A row cannot place a child above or below
+ * itself, so dropping there wraps — and which third was hit says where
+ * the new stack should align what it now holds.
+ */
+function boundariesOf(
   parent: CanvasNode,
+  parentRect: Rect,
   siblings: readonly Rect[],
-  index: number,
-): Record<string, string> | null {
-  if (siblings.length === 0) return null
+  horizontal: boolean,
+): Boundary[] {
+  const near = (rect: Rect) => (horizontal ? rect.left : rect.top)
+  const far = (rect: Rect) => (horizontal ? rect.left + rect.width : rect.top + rect.height)
+  const crossNear = (rect: Rect) => (horizontal ? rect.top : rect.left)
+  const crossFar = (rect: Rect) => (horizontal ? rect.top + rect.height : rect.left + rect.width)
 
-  // Only the one or two boxes the line actually butts against get rebased
-  // into workspace space. `toLocal` re-reads the workspace's own rect on
-  // every call, so converting the whole list — as measuring each sibling
-  // through `measureRect` used to — paid for that read once per sibling
-  // to position a line that never touches most of them.
-  const local = (rect: Rect | null) => (rect ? toLocal(rect, workspace.value) : null)
-  const before = local(siblings[index - 1] ?? null)
-  const after = local(siblings[index] ?? null)
-  if (!before && !after) return null
+  const boundaries: Boundary[] = []
 
-  const anchor = (before ?? after)!
-  const other = before && after ? after : null
-  const horizontal = layoutIsHorizontal(parent, siblings)
+  // Along the main axis. A line here runs across the flow and spans the
+  // whole border, because it is dividing the row rather than describing
+  // the frame arriving.
+  const insertAt = (offset: number, index: number) =>
+    boundaries.push({
+      offset,
+      from: crossNear(parentRect),
+      to: crossFar(parentRect),
+      horizontal: !horizontal,
+      intent: { kind: 'insert', parentId: parent.id, index },
+    })
 
-  const span = (rect: Rect) => ({
-    top: Math.min(rect.top, anchor.top) - INSERTION_OVERSHOOT,
-    height: Math.max(rect.height, anchor.height) + INSERTION_OVERSHOOT * 2,
+  insertAt(near(parentRect), 0)
+  siblings.forEach((child, index) => {
+    if (index < siblings.length - 1) insertAt(far(child), index + 1)
   })
+  insertAt(far(parentRect), siblings.length)
 
-  if (horizontal) {
-    const x = before && after ? (before.left + before.width + after.left) / 2 : null
-    const left = x ?? (after ? after.left : anchor.left + anchor.width)
-    const { top, height } = span(other ?? anchor)
-    return { left: `${left}px`, top: `${top}px`, height: `${height}px` }
+  // Across it. Split in three, so the line is short enough to say which
+  // way the new stack will align what it wraps.
+  const direction: 'row' | 'column' = horizontal ? 'column' : 'row'
+  // These lie across the flow, so they sit at the parent's cross-axis
+  // edges and run along its main axis — the opposite pairing to the
+  // insert borders above, which is easy to get backwards.
+  const span = far(parentRect) - near(parentRect)
+
+  for (const before of [true, false]) {
+    const offset = before ? crossNear(parentRect) : crossFar(parentRect)
+
+    ALIGNMENTS.forEach((align, third) => {
+      boundaries.push({
+        offset,
+        from: near(parentRect) + (span / 3) * third,
+        to: near(parentRect) + (span / 3) * (third + 1),
+        horizontal,
+        intent: { kind: 'wrap', targetId: parent.id, direction, before, align },
+      })
+    })
   }
 
-  const y = before && after ? (before.top + before.height + after.top) / 2 : null
-  const top = y ?? (after ? after.top : anchor.top + anchor.height)
-  const left = Math.min((other ?? anchor).left, anchor.left) - INSERTION_OVERSHOOT
-  const width = Math.max((other ?? anchor).width, anchor.width) + INSERTION_OVERSHOOT * 2
-  return { left: `${left}px`, top: `${top}px`, width: `${width}px` }
+  return boundaries
+}
+
+/**
+ * The border the pointer is actually on, or null.
+ *
+ * Nothing is chosen by being nearest: the pointer has to be within reach
+ * of the border *and* alongside it. Miss every border — the middle of a
+ * cell, say — and there is no insertion to offer, which is what lets the
+ * frame land on the page instead.
+ */
+function boundaryAt(boundaries: readonly Boundary[], point: ViewPoint): Boundary | null {
+  let best: Boundary | null = null
+  let bestDistance = Infinity
+
+  for (const boundary of boundaries) {
+    const across = boundary.horizontal ? point.y : point.x
+    const along = boundary.horizontal ? point.x : point.y
+
+    const distance = Math.abs(across - boundary.offset)
+    if (distance > BOUNDARY_REACH) continue
+    if (along < boundary.from || along > boundary.to) continue
+
+    if (distance < bestDistance) {
+      best = boundary
+      bestDistance = distance
+    }
+  }
+
+  return best
+}
+
+/** The line itself: lying along the border it has snapped to. */
+function insertionLine(boundary: Boundary): Record<string, string> {
+  if (boundary.horizontal) {
+    return {
+      left: `${boundary.from}px`,
+      top: `${boundary.offset}px`,
+      width: `${boundary.to - boundary.from}px`,
+    }
+  }
+
+  return {
+    left: `${boundary.offset}px`,
+    top: `${boundary.from}px`,
+    height: `${boundary.to - boundary.from}px`,
+  }
 }
 
 /**
@@ -1159,24 +1334,48 @@ function applyTransform(event: PointerEvent) {
 function updateMoveFeedback(active: Transform, rect: Rect | null, point: ViewPoint) {
   if (!rect) return
 
-  const target = frameContaining(rect, active.nodeId)
-  const targetId = target?.dataset.nodeId ?? null
+  // Two questions, two rules. What the box is wholly *inside* decides
+  // nesting; where the cursor is decides whose borders are on offer.
+  const contained = getNode(frameContaining(rect, active.nodeId)?.dataset.nodeId)
+  const stack = stackNear(point, active.nodeId)
 
-  dropTargetNode.value = target
+  // A box wholly inside something beneath that stack goes in there — a
+  // cell is a container in its own right once you are properly inside it.
+  const nested = contained && stack && isBeneath(contained, stack.id) ? contained : null
+  const settled = nested ?? stack ?? contained ?? null
+
+  const targetId = settled?.id ?? null
+  dropTargetNode.value = targetId ? nodeElement(targetId) : null
   dropTargetId.value = targetId
   dropRect.value = isViewport(targetId) ? null : measureRect(targetId)
 
-  // Only a frame that lays its children out has an order to insert into;
-  // one that lets them position themselves has nowhere to draw a line.
-  const parent = getNode(targetId)
-  if (!parent || parent.layout === 'none') {
+  const parentRect = settled ? measureRect(settled.id) : null
+  if (!settled || settled.layout === 'none' || !parentRect) {
     insertionStyle.value = null
+    dropIntent.value = null
     return
   }
 
-  // Measured once for both the index and the line — see `siblingBoxes`.
-  const siblings = siblingBoxes(parent, active.nodeId)
-  insertionStyle.value = insertionLine(parent, siblings, insertionIndex(siblings, point))
+  // Measured once and shared — see `siblingBoxes`.
+  const siblings = siblingBoxes(settled, active.nodeId).map((box) => toLocal(box, workspace.value))
+  // The pointer rebased into the space the borders are measured in — a
+  // zero-sized box, since `toLocal` speaks in rects.
+  const local = toLocal({ left: point.x, top: point.y, width: 0, height: 0 }, workspace.value)
+  const boundary = boundaryAt(
+    boundariesOf(settled, parentRect, siblings, layoutIsHorizontal(settled, siblings)),
+    { x: local.left, y: local.top },
+  )
+
+  // No border under the pointer — the middle of a cell, say. There is
+  // nothing to insert against, so the drop falls to the page.
+  if (!boundary) {
+    insertionStyle.value = null
+    dropIntent.value = null
+    return
+  }
+
+  dropIntent.value = boundary.intent
+  insertionStyle.value = insertionLine(boundary)
 }
 
 /** Clears everything a move gesture puts on screen. */
@@ -1185,6 +1384,7 @@ function clearMoveFeedback() {
   dragOriginClient = null
   dragOriginRect.value = null
   insertionStyle.value = null
+  dropIntent.value = null
   dropTargetId.value = null
   dropTargetNode.value = null
   dropRect.value = null
@@ -1220,6 +1420,91 @@ function placementIn(parent: CanvasNode, node: CanvasNode, local: Rect): NodeGeo
 }
 
 /**
+ * States the size a frame currently has, on any axis it was only getting
+ * by grant of a parent that laid it out.
+ *
+ * `fill` means "share what my siblings leave"; carried somewhere nothing
+ * grants it, the box collapses to nothing. The same freeze the inspector
+ * performs when a frame leaves the flow.
+ */
+function freezeFilledAxes(node: CanvasNode, local: Rect) {
+  for (const axis of ['width', 'height'] as const) {
+    const mode = axis === 'width' ? node.widthMode : node.heightMode
+    if (mode !== 'fill') continue
+    // Mode first: switching it clears the number for the mode it left, so
+    // a size written before this would be undone by it.
+    updateSizeMode(node.id, axis, 'fixed')
+    updateGeometry(node.id, { [axis]: Math.round(local[axis]) })
+  }
+}
+
+/**
+ * Puts a new stack where `target` stood, holding `target` and the dragged
+ * frame.
+ *
+ * What a cross-axis drop means: a row cannot place a child below itself,
+ * so honouring "below this row" takes a frame the row can live inside.
+ * Built from the existing store operations rather than a new one —
+ * `moveNode` already does the three-field reparent and takes an index.
+ *
+ * The new stack is `fit` on both axes rather than sized to the boxes it
+ * is given: it hugs whatever the layout produces, so it stays right when
+ * either child later changes, where a stated size would quietly stop
+ * matching.
+ */
+function wrapInStack(target: CanvasNode, dragged: CanvasNode, intent: DropIntent & { kind: 'wrap' }) {
+  const parentId = target.parentId
+  if (!parentId) return
+
+  const parent = getNode(parentId)
+  if (!parent) return
+
+  const slot = parent.childrenIds.indexOf(target.id)
+  const draggedRectLocal = measureNodeRect(dragged.id)
+  const targetRectLocal = measureNodeRect(target.id)
+
+  const stack = addNode(
+    'div',
+    {
+      layout: 'flex',
+      // `alignItems`, because the frame was dropped across the new
+      // stack's main axis: which third of the border it landed on is the
+      // only thing that could have said where along that edge it goes.
+      styles: {
+        flexDirection: intent.direction,
+        gap: STACK_GAP,
+        alignItems: intent.align,
+      },
+      widthMode: 'fit',
+      heightMode: 'fit',
+      // Where the target stood, so the new stack lands in its place
+      // rather than at the parent's origin.
+      left: target.left,
+      top: target.top,
+      pinLeft: true,
+      pinTop: true,
+    },
+    parentId,
+  )
+
+  // Into the slot the target occupied, so the page's own order is kept.
+  if (slot !== -1) moveNode(stack.id, parentId, slot)
+
+  moveNode(target.id, stack.id, 0)
+  moveNode(dragged.id, stack.id, intent.before ? 0 : 1)
+
+  // Both are placed by the new stack now, so their own offsets are inert
+  // — and any `fill` they had was granted by a parent they have left.
+  for (const [node, local] of [
+    [target, targetRectLocal],
+    [dragged, draggedRectLocal],
+  ] as const) {
+    if (local) freezeFilledAxes(node, local)
+    updateGeometry(node.id, placementIn(stack, node, local ?? { left: 0, top: 0, width: 0, height: 0 }))
+  }
+}
+
+/**
  * Settles a finished move: which frame the node now belongs to, and where
  * among its children it sits.
  *
@@ -1250,6 +1535,7 @@ function finishTransform(event: PointerEvent) {
   // Released clear of the page entirely: it still belongs to something,
   // and the page is the only thing left.
   const targetElement = dropTargetNode.value ?? nodeElement(VIEWPORT_ID)
+  const settledIntent = dropIntent.value
   clearMoveFeedback()
 
   if (!active?.moved || active.edges.length > 0) return
@@ -1263,8 +1549,32 @@ function finishTransform(event: PointerEvent) {
   const target = getNode(targetId)
   if (!target || !targetElement) return
 
-  // One measurement for whichever branch below runs — see `siblingBoxes`.
-  const index = insertionIndex(siblingBoxes(target, node.id), point)
+  // Whatever the line was promising. A cross-axis drop asks for
+  // something the target cannot do on its own — see `wrapInStack` — and
+  // is skipped only when the target's own parent already runs that way,
+  // since it can simply take the frame and a wrapper would deepen the
+  // tree for nothing.
+  const intent = settledIntent
+  if (intent?.kind === 'wrap' && intent.targetId === targetId) {
+    const grandparent = getNode(target.parentId)
+    const alreadyStacked =
+      grandparent?.layout === 'flex' &&
+      (grandparent.styles.flexDirection ?? 'row') === intent.direction
+
+    if (!alreadyStacked) {
+      wrapInStack(target, node, intent)
+      return
+    }
+  }
+
+  // No border was under the pointer, so nothing was offered and nothing
+  // is taken: the frame stays where it was dropped, on the page.
+  if (!intent && target.layout !== 'none') return
+
+  const index =
+    intent?.kind === 'insert'
+      ? intent.index
+      : insertionIndex(siblingBoxes(target, node.id), point)
 
   if (targetId === node.parentId) {
     // Same parent, so this is a reorder — and only a frame the parent
@@ -1283,21 +1593,7 @@ function finishTransform(event: PointerEvent) {
 
   moveNode(node.id, targetId, index)
 
-  // `fill` is a grant from a parent that lays the frame out. Carrying it
-  // into a parent that does not would collapse the box to nothing, so the
-  // size it is leaving with is stated before the grant disappears — the
-  // same freeze the inspector performs when a frame leaves the flow.
-  if (!laidOut) {
-    for (const axis of ['width', 'height'] as const) {
-      const mode = axis === 'width' ? node.widthMode : node.heightMode
-      if (mode !== 'fill') continue
-      // Mode first: switching it clears the number for the mode it left,
-      // so a size written before this would be undone by it.
-      updateSizeMode(node.id, axis, 'fixed')
-      updateGeometry(node.id, { [axis]: Math.round(local[axis]) })
-    }
-  }
-
+  if (!laidOut) freezeFilledAxes(node, local)
   updateGeometry(node.id, placementIn(target, node, local))
 }
 
