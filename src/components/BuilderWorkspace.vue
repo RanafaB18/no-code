@@ -46,10 +46,12 @@ import {
 const { activeTool, disarm } = useTools()
 const {
   selectedId,
+  selectedIds,
   selectedNode,
   addNode,
   removeNode,
   selectNode,
+  selectNodes,
   moveNode,
   updateGeometry,
   updateSizeMode,
@@ -167,10 +169,44 @@ function frameStyle(rect: Rect | null, gap: number) {
  * can't live inside it without appearing in the user's own content. The
  * frame is a sibling overlay, positioned to match.
  */
-const selectionRect = ref<Rect | null>(null)
+/**
+ * Every selected node, watched as a whole.
+ *
+ * `selectedNode` is null for a selection of several, so watching that
+ * alone left a group move re-measuring nothing: the frames slid away and
+ * their outlines and handles stayed behind at the positions they started
+ * from, reading as ghosts of where they had been.
+ */
+const selectedNodes = computed(() => selectedIds.value.map((id) => getNode(id)))
 
+const selectionRects = ref<Rect[]>([])
+
+/** The frame drawn round the selection: one box, or the union of many. */
+const selectionRect = computed(() => unionOf(selectionRects.value))
+
+/** The smallest box holding all of `rects`, or null when there are none. */
+function unionOf(rects: readonly Rect[]): Rect | null {
+  if (rects.length === 0) return null
+
+  const left = Math.min(...rects.map((rect) => rect.left))
+  const top = Math.min(...rects.map((rect) => rect.top))
+  const right = Math.max(...rects.map((rect) => rect.left + rect.width))
+  const bottom = Math.max(...rects.map((rect) => rect.top + rect.height))
+
+  return { left, top, width: right - left, height: bottom - top }
+}
+
+/**
+ * The selection frame's box: one frame's, or the union of several.
+ *
+ * A selection of many gets one frame around the lot rather than a frame
+ * each — it is being treated as a single thing, and the handles resize it
+ * as one.
+ */
 function measureSelection() {
-  selectionRect.value = measureRect(selectedId.value)
+  selectionRects.value = selectedIds.value
+    .map((id) => measureRect(id))
+    .filter((rect): rect is Rect => rect !== null)
 }
 
 /**
@@ -650,7 +686,7 @@ function elementUnder(event: PointerEvent): HTMLElement | null {
 // runs *before* the component re-renders, so a newly selected element
 // wouldn't be in the DOM yet. 'post' runs after that render, so the node
 // is queryable by the time this fires.
-watch([selectedId, selectedNode], measureSelection, {
+watch([selectedIds, selectedNodes], measureSelection, {
   deep: true,
   flush: 'post',
 })
@@ -964,6 +1000,99 @@ function clearDrag() {
 }
 
 /**
+ * The rubber band drawn by dragging across empty canvas, in client px.
+ *
+ * Selecting by sweeping, rather than the containment rule the rest of the
+ * canvas runs on: a marquee takes anything it *touches*, which is what
+ * makes it possible to catch a row of frames without enclosing every one
+ * of them.
+ */
+const marqueeOrigin = ref<ViewPoint | null>(null)
+const marqueeCurrent = ref<ViewPoint | null>(null)
+
+/** What the band currently covers, highlighted until it is released. */
+const marqueeHits = ref<NodeId[]>([])
+
+/** The band itself, normalised so a sweep in any direction has size. */
+const marqueeRect = computed<Rect | null>(() => {
+  const origin = marqueeOrigin.value
+  const current = marqueeCurrent.value
+  if (!origin || !current) return null
+
+  return {
+    left: Math.min(origin.x, current.x),
+    top: Math.min(origin.y, current.y),
+    width: Math.abs(current.x - origin.x),
+    height: Math.abs(current.y - origin.y),
+  }
+})
+
+const marqueeStyle = computed(() => {
+  const rect = marqueeRect.value
+  if (!rect || !workspace.value) return null
+  return frameStyle(toLocal(rect, workspace.value), 0)
+})
+
+/** True when two boxes overlap at all — touching is enough. */
+function overlaps(a: Rect, b: Rect): boolean {
+  return (
+    a.left < b.left + b.width &&
+    a.left + a.width > b.left &&
+    a.top < b.top + b.height &&
+    a.top + a.height > b.top
+  )
+}
+
+/**
+ * The frames a band has caught: the page's own children, and no deeper.
+ *
+ * Sweeping a row picks the row, not the row and each of its cells. What
+ * is on the page is what a marquee is for; reaching inside a frame is
+ * what clicking into it already does.
+ */
+function marqueeCatch(rect: Rect): NodeId[] {
+  const caught: NodeId[] = []
+
+  for (const childId of getNode(VIEWPORT_ID)?.childrenIds ?? []) {
+    const element = nodeElement(childId)
+    if (!element) continue
+
+    const box = element.getBoundingClientRect()
+    const child = { left: box.left, top: box.top, width: box.width, height: box.height }
+    if (overlaps(rect, child)) caught.push(childId)
+  }
+
+  return caught
+}
+
+/**
+ * Outlines for a selection of more than one frame.
+ *
+ * The union frame around them carries the handles and is what actually
+ * gets resized; these say which frames are inside it, which the union
+ * alone cannot — a box drawn round three frames looks the same as one
+ * drawn round the empty space between them.
+ */
+const multiSelectionStyles = computed(() =>
+  selectionRects.value.length > 1
+    ? selectionRects.value.map((rect) => frameStyle(rect, 0)!)
+    : [],
+)
+
+/** Overlay boxes for the frames the band is currently over. */
+const marqueeHitStyles = computed(() =>
+  marqueeHits.value
+    .map((id) => frameStyle(measureRect(id), 0))
+    .filter((style): style is NonNullable<typeof style> => style !== null),
+)
+
+function clearMarquee() {
+  marqueeOrigin.value = null
+  marqueeCurrent.value = null
+  marqueeHits.value = []
+}
+
+/**
  * A move or resize in progress.
  *
  * `edges` is what separates the two: empty means the whole box is being
@@ -1005,6 +1134,15 @@ interface Transform {
   ratio: number | null
   /** Stays false until the pointer clears MIN_DRAG, so a click is not a drag. */
   moved: boolean
+  /**
+   * The frames a union resize is scaling, with the boxes they began at.
+   *
+   * Empty for an ordinary gesture, which acts on `nodeId` alone. When it
+   * is filled, `start` above is the union rather than any one frame, so
+   * `resizeGeometry` computes the new union and each of these is mapped
+   * into it — see `distribute`.
+   */
+  participants: readonly { id: NodeId; start: Rect }[]
 }
 
 let transform: Transform | null = null
@@ -1152,6 +1290,7 @@ function beginTransform(event: PointerEvent, nodeId: NodeId, edges: readonly Edg
     absolute,
     origin: { x: event.clientX, y: event.clientY },
     start,
+    participants: [],
     // All four pins and their flags, not just the origin pair: a gesture
     // can drop one, so cancelling has to be able to put it back exactly.
     restore: {
@@ -1330,12 +1469,18 @@ function applyTransform(event: PointerEvent) {
     // Dragging an edge states a size in pixels, so an axis that was
     // filling or fitting becomes fixed — at whatever it was measuring
     // when the gesture began, which `start` already holds.
+    const resizing =
+      active.participants.length > 0
+        ? active.participants.map((entry) => entry.id)
+        : [active.nodeId]
+
     for (const [axis, sides] of RESIZE_AXES) {
-      if (sides.some((side) => active.edges.includes(side))) {
-        updateSizeMode(active.nodeId, axis, 'fixed')
-      }
+      if (!sides.some((side) => active.edges.includes(side))) continue
+      for (const id of resizing) updateSizeMode(id, axis, 'fixed')
     }
-    updateGeometry(active.nodeId, resizeGeometry(active, canvasDelta.x, canvasDelta.y))
+    const resized = resizeGeometry(active, canvasDelta.x, canvasDelta.y)
+    if (active.participants.length > 0) distribute(active, resized)
+    else updateGeometry(active.nodeId, resized)
     return
   }
 
@@ -1343,7 +1488,16 @@ function applyTransform(event: PointerEvent) {
   // in-flow node is placed by its parent, so it follows the pointer by a
   // transform instead — its slot stays reserved behind it, which is what
   // the placeholder marks, and its siblings hold still.
-  if (active.absolute) {
+  if (active.participants.length > 0) {
+    // A move is a union that only shifts, so the same distribution serves
+    // both: at a scale of one, every frame simply takes the same delta.
+    distribute(active, {
+      left: active.start.left + canvasDelta.x,
+      top: active.start.top + canvasDelta.y,
+      width: active.start.width,
+      height: active.start.height,
+    })
+  } else if (active.absolute) {
     updateGeometry(active.nodeId, {
       left: active.start.left + canvasDelta.x,
       top: active.start.top + canvasDelta.y,
@@ -1352,7 +1506,11 @@ function applyTransform(event: PointerEvent) {
     dragOffset.value = canvasDelta
   }
 
-  updateMoveFeedback(active, draggedRect(dx, dy), { x: event.clientX, y: event.clientY })
+  // No drop feedback for a group: it moves the frames and leaves them
+  // where they were in the tree, so there is nothing to promise.
+  if (active.participants.length === 0) {
+    updateMoveFeedback(active, draggedRect(dx, dy), { x: event.clientX, y: event.clientY })
+  }
 }
 
 /**
@@ -1569,6 +1727,10 @@ function finishTransform(event: PointerEvent) {
 
   if (!active?.moved || active.edges.length > 0) return
 
+  // A group move settles nothing: every frame keeps the parent it had,
+  // and reparenting a whole selection at once is its own question.
+  if (active.participants.length > 0) return
+
   const node = getNode(active.nodeId)
   if (!node?.parentId || !rect) return
 
@@ -1636,10 +1798,96 @@ function cancelTransform() {
   }
 }
 
+/**
+ * Starts a gesture on several frames at once — a resize when `edges`
+ * names any, a move when it is empty.
+ *
+ * `start` is the union of them all, so `resizeGeometry` can work on it
+ * exactly as it does for one frame and `distribute` maps the result back
+ * onto each. Everything a marquee selects is a child of the page, so all
+ * of them position themselves and share one coordinate space — which is
+ * what makes the arithmetic below a plain scale rather than a per-parent
+ * conversion.
+ */
+function beginUnionTransform(event: PointerEvent, edges: readonly Edge[]) {
+  const participants = selectedIds.value
+    .map((id) => {
+      const node = getNode(id)
+      const measured = measureNodeRect(id)
+      if (!node || resolvedPosition(node) !== 'absolute') return null
+
+      return {
+        id,
+        start: {
+          left: node.left ?? measured?.left ?? 0,
+          top: node.top ?? measured?.top ?? 0,
+          width: startSize(node, measured, 'width'),
+          height: startSize(node, measured, 'height'),
+        },
+      }
+    })
+    .filter((entry): entry is { id: NodeId; start: Rect } => entry !== null)
+
+  const union = unionOf(participants.map((entry) => entry.start))
+  if (!union || participants.length === 0) return
+
+  transform = {
+    nodeId: participants[0]!.id,
+    edges,
+    released: [],
+    ratio: null,
+    absolute: true,
+    origin: { x: event.clientX, y: event.clientY },
+    start: union,
+    restore: {},
+    moved: false,
+    participants,
+  }
+}
+
+/**
+ * Writes a resized union back onto the frames inside it.
+ *
+ * Each keeps its place and size relative to the union, so the selection
+ * scales as one piece rather than every frame taking the drag whole.
+ */
+function distribute(active: Transform, union: NodeGeometry) {
+  const nextWidth = union.width ?? active.start.width
+  const nextHeight = union.height ?? active.start.height
+  const nextLeft = union.left ?? active.start.left
+  const nextTop = union.top ?? active.start.top
+
+  // A union with no extent cannot be scaled out of, so the ratio is held
+  // at 1 rather than dividing by zero and sending every frame to NaN.
+  const scaleX = active.start.width === 0 ? 1 : nextWidth / active.start.width
+  const scaleY = active.start.height === 0 ? 1 : nextHeight / active.start.height
+
+  for (const { id, start } of active.participants) {
+    updateGeometry(id, {
+      left: nextLeft + (start.left - active.start.left) * scaleX,
+      top: nextTop + (start.top - active.start.top) * scaleY,
+      width: Math.max(MIN_SIZE, start.width * scaleX),
+      height: Math.max(MIN_SIZE, start.height * scaleY),
+      pinLeft: true,
+      pinTop: true,
+    })
+  }
+}
+
+/** The selected frame this id belongs to — itself, or an ancestor. */
+function selectedAncestorOf(id: NodeId | null): NodeId | null {
+  let current = getNode(id)
+  while (current) {
+    if (selectedIds.value.includes(current.id)) return current.id
+    current = getNode(current.parentId)
+  }
+  return null
+}
+
 /** Shared by the corner/edge dots and the edge strips — both just start a resize. */
 function handleResizeDown(event: PointerEvent, edges: readonly Edge[]) {
   const id = selectedId.value
-  if (!id) return
+  if (!id && selectedIds.value.length === 0) return
 
   // Stops the workspace's own handler treating this as a press on empty
   // canvas — the handles are overlay siblings, not inside any node, so it
@@ -1647,7 +1895,8 @@ function handleResizeDown(event: PointerEvent, edges: readonly Edge[]) {
   event.stopPropagation()
   event.preventDefault()
 
-  beginTransform(event, id, edges)
+  if (id) beginTransform(event, id, edges)
+  else beginUnionTransform(event, edges)
 }
 
 function handlePointerDown(event: PointerEvent) {
@@ -1693,6 +1942,17 @@ function handlePointerDown(event: PointerEvent) {
       return
     }
 
+    // Pressing something already selected alongside others drags the lot,
+    // rather than throwing the selection away to pick one out of it.
+    // Matched up the tree as well as on the node itself, so pressing a
+    // cell of a selected row still counts as pressing the row.
+    const grouped = selectedIds.value.length > 1 ? selectedAncestorOf(targetId) : null
+    if (grouped) {
+      event.preventDefault()
+      beginUnionTransform(event, [])
+      return
+    }
+
     const id = isViewport(targetId) ? null : targetId
     selectNode(id)
 
@@ -1704,7 +1964,16 @@ function handlePointerDown(event: PointerEvent) {
       // out behind the element.
       event.preventDefault()
       beginTransform(event, id, [])
+      return
     }
+
+    // Nothing under the press, so the drag is a sweep rather than a move.
+    // Captured like any other gesture, or the band would stop updating the
+    // moment the pointer left the workspace.
+    event.preventDefault()
+    marqueeOrigin.value = { x: event.clientX, y: event.clientY }
+    marqueeCurrent.value = { x: event.clientX, y: event.clientY }
+    capturePointer(event.pointerId)
     return
   }
 
@@ -1730,6 +1999,13 @@ function handlePointerMove(event: PointerEvent) {
     return
   }
 
+  if (marqueeOrigin.value) {
+    marqueeCurrent.value = { x: event.clientX, y: event.clientY }
+    const rect = marqueeRect.value
+    marqueeHits.value = rect ? marqueeCatch(rect) : []
+    return
+  }
+
   if (!dragOrigin.value) return
   dragCurrent.value = { x: event.clientX, y: event.clientY }
   // The box has changed shape, so what encloses it may have changed too.
@@ -1744,6 +2020,16 @@ function handlePointerUp(event: PointerEvent) {
 
   if (transform) {
     finishTransform(event)
+    releasePointer(event.pointerId)
+    return
+  }
+
+  if (marqueeOrigin.value) {
+    // Whatever the band was highlighting is what it takes. A press with
+    // no sweep catches nothing and so clears the selection, which is what
+    // pressing bare canvas has always meant.
+    selectNodes(marqueeHits.value)
+    clearMarquee()
     releasePointer(event.pointerId)
     return
   }
@@ -1795,6 +2081,7 @@ function handlePointerUp(event: PointerEvent) {
 function cancelGestures() {
   cancelTransform()
   clearDrag()
+  clearMarquee()
   panGesture = null
   isPanning.value = false
 }
@@ -1809,7 +2096,9 @@ useCanvasShortcuts({
     // transforming would otherwise leave the gesture writing geometry to
     // an id that no longer exists.
     cancelGestures()
-    if (selectedId.value) removeNode(selectedId.value)
+    // A copy, and not a redundant one: `removeNode` prunes the selection
+    // as it goes, so iterating the live list would skip every other entry.
+    for (const id of selectedIds.value.slice()) removeNode(id)
   },
 })
 </script>
@@ -1915,6 +2204,30 @@ useCanvasShortcuts({
       at the page end already says so.
     -->
     <div v-if="dropFrameStyle" class="workspace__drop-target" :style="dropFrameStyle" />
+
+    <!--
+      The sweep, and an outline on every frame it currently covers — the
+      selection it would commit, shown before it is committed.
+    -->
+    <div
+      v-for="(hit, index) in marqueeHitStyles"
+      :key="index"
+      class="workspace__marquee-hit"
+      :style="hit"
+    />
+    <div v-if="marqueeStyle" class="workspace__marquee" :style="marqueeStyle" />
+
+    <!--
+      A selection of several frames. Outlines only: the handles below
+      belong to the single-frame case, which is the only one they could
+      act on unambiguously.
+    -->
+    <div
+      v-for="(box, index) in multiSelectionStyles"
+      :key="index"
+      class="workspace__marquee-hit"
+      :style="box"
+    />
 
     <!--
       The slot a dragged frame is leaving, so it stays visible behind the
@@ -2121,6 +2434,24 @@ useCanvasShortcuts({
 
 /* Faint on purpose: it marks a space rather than occupying one, and has
    to stay quieter than the frame that is actually being dragged. */
+/* The sweep itself: a wash rather than a fill, so the frames underneath
+   stay readable while it passes over them. */
+.workspace__marquee {
+  position: absolute;
+  background-color: color-mix(in srgb, var(--color-accent) 10%, transparent);
+  border: 1px solid color-mix(in srgb, var(--color-accent) 40%, transparent);
+  pointer-events: none;
+}
+
+/* What the sweep has caught. The same hairline the selection frame uses,
+   because that is what these are about to become. */
+.workspace__marquee-hit {
+  position: absolute;
+  outline: 1px solid var(--color-accent);
+  outline-offset: -1px;
+  pointer-events: none;
+}
+
 .workspace__drag-origin {
   position: absolute;
   background-color: color-mix(in srgb, var(--color-accent) 8%, transparent);

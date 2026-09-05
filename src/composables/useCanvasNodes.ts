@@ -181,7 +181,26 @@ export function createViewport(): CanvasNode {
  */
 const nodes = ref<Record<NodeId, CanvasNode>>({ [VIEWPORT_ID]: createViewport() })
 
-const selectedId = ref<NodeId | null>(null)
+/**
+ * Everything currently selected, in the order it was picked.
+ *
+ * A list rather than one id because a marquee takes whatever it sweeps
+ * over. Most of the editor still works on exactly one frame — you cannot
+ * resize two boxes with one set of handles, and the inspector edits one
+ * node's fields — so `selectedId` below narrows to the single case and is
+ * what those consumers keep reading.
+ */
+const selectedIds = ref<NodeId[]>([])
+
+/**
+ * The selection when it is exactly one frame, else null.
+ *
+ * Deliberately null for a multi-selection rather than "the first of
+ * them": the handles, the inspector and the constraint widget all act on
+ * the frame they are given, and handing them one of several would let a
+ * drag silently resize a frame the user was not pointing at.
+ */
+const selectedId = computed(() => (selectedIds.value.length === 1 ? selectedIds.value[0]! : null))
 
 /** O(1). Returns null rather than throwing for an unknown id. */
 export function getNode(id: NodeId | null | undefined): CanvasNode | null {
@@ -285,13 +304,22 @@ export function removeNode(id: NodeId): void {
     delete nodes.value[doomedId]
   }
 
-  if (selectedId.value && !getNode(selectedId.value)) {
+  const survivors = selectedIds.value.filter((selected) => getNode(selected) !== null)
+  if (survivors.length !== selectedIds.value.length) {
     // Land on the parent rather than nothing, so you are never stranded
     // next to something you can no longer click — except when that parent
     // is the viewport, which is the document rather than an element and is
     // deliberately not selectable by pointer. Selecting it here would be a
     // back door into editing the canvas that nothing else offers.
-    selectedId.value = parent && !isViewport(parent.id) ? parent.id : null
+    //
+    // Only when nothing else survived: with part of a multi-selection
+    // deleted, what remains of it is a better answer than its parent.
+    selectedIds.value =
+      survivors.length > 0
+        ? survivors
+        : parent && !isViewport(parent.id)
+          ? [parent.id]
+          : []
   }
 }
 
@@ -507,7 +535,7 @@ export function* walkNodes(id: NodeId): Generator<CanvasNode> {
 /** Replaces the document with an empty viewport. */
 export function resetDocument(): void {
   nodes.value = { [VIEWPORT_ID]: createViewport() }
-  selectedId.value = null
+  selectedIds.value = []
 }
 
 /**
@@ -521,19 +549,26 @@ export function useCanvasNodes() {
   const viewport = computed(() => getNode(VIEWPORT_ID)!)
 
   function selectNode(id: NodeId | null) {
-    selectedId.value = id
+    selectedIds.value = id === null ? [] : [id]
+  }
+
+  /** Replaces the whole selection — what a marquee commits on release. */
+  function selectNodes(ids: readonly NodeId[]) {
+    selectedIds.value = [...ids]
   }
 
   return {
     nodes,
     viewport,
     selectedId,
+    selectedIds,
     selectedNode,
     getNode,
     addNode,
     removeNode,
     moveNode,
     selectNode,
+    selectNodes,
     updateStyle,
     updateGeometry,
     updateSizeMode,

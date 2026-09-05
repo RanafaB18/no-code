@@ -31,7 +31,7 @@ import { LAYOUT_LABEL } from '@/composables/useTools'
  *   properly means measuring before the move and rewriting the pins
  *   after. Dragging on the canvas already reorders within a parent.
  */
-const { selectedId, selectNode, removeNode } = useCanvasNodes()
+const { selectedIds, selectNode, removeNode } = useCanvasNodes()
 
 interface LayerRow {
   id: NodeId
@@ -98,7 +98,7 @@ const rows = computed<LayerRow[]>(() => {
       v-for="row in rows"
       :key="row.id"
       class="layers__row"
-      :class="{ 'layers__row--selected': selectedId === row.id }"
+      :class="{ 'layers__row--selected': selectedIds.includes(row.id) }"
       :style="{ '--depth': row.depth }"
     >
       <!-- A fixed-size placeholder when there is nothing to fold, so every
@@ -118,7 +118,7 @@ const rows = computed<LayerRow[]>(() => {
       <button
         type="button"
         class="layers__label"
-        :aria-current="selectedId === row.id"
+        :aria-current="selectedIds.includes(row.id)"
         @click="selectNode(row.id)"
       >
         {{ row.label }}
